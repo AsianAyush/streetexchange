@@ -51,17 +51,19 @@ const SELL_PRESET_AMOUNTS = [20, 50, 100, 250, 500]
 function StatusBadge({ status }: { status: Order['status'] }) {
   const classes: Record<string, string> = {
     PENDING: 'badge badge-pending',
+    AWAITING_VERIFICATION: 'badge badge-pending',
     IN_PROGRESS: 'badge badge-in-progress',
     COMPLETED: 'badge badge-completed',
     CANCELLED: 'badge badge-cancelled',
   }
   const labels: Record<string, string> = {
     PENDING: '⏳ Pending',
+    AWAITING_VERIFICATION: '⏳ Awaiting Verification',
     IN_PROGRESS: '🔄 In Progress',
     COMPLETED: '✅ Completed',
     CANCELLED: '✗ Cancelled',
   }
-  return <span className={classes[status]}>{labels[status]}</span>
+  return <span className={classes[status] || 'badge'}>{labels[status] || status}</span>
 }
 
 function CopyButton({ text }: { text: string }) {

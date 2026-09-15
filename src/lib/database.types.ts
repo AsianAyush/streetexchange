@@ -225,7 +225,7 @@ export type Database = {
     }
     Enums: {
       network_type_enum: "TRC20" | "BEP20"
-      order_status_enum: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED"
+      order_status_enum: "PENDING" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED" | "AWAITING_VERIFICATION"
       order_type_enum: "BUY" | "SELL"
       user_role_enum: "USER" | "ADMIN"
     }

@@ -281,7 +281,7 @@ export default function OrderCheckoutPage() {
         .from('orders')
         .update({
           payment_gateway_ref: cleaned,
-          status: 'IN_PROGRESS',
+          status: 'AWAITING_VERIFICATION',
         })
         .eq('id', order.id)
         .select()
@@ -289,14 +289,17 @@ export default function OrderCheckoutPage() {
 
       if (updateError) {
         setRefError(updateError.message || 'Failed to submit reference.')
+        setSubmittingRef(false)
       } else if (data) {
         setOrder(data)
         setRefSuccess(true)
-        setTimeout(() => setRefSuccess(false), 4000)
+        // Brief success flash, then redirect to dashboard
+        setTimeout(() => {
+          router.push('/dashboard')
+        }, 1500)
       }
     } catch (err: any) {
       setRefError(err?.message || 'Error updating order.')
-    } finally {
       setSubmittingRef(false)
     }
   }
@@ -344,7 +347,7 @@ export default function OrderCheckoutPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-white p-4 md:p-8">
-      <div className="max-w-2xl mx-auto space-y-6">
+      <div className="max-w-2xl mx-auto space-y-6 animate-antigravity">
 
         {/* Navigation Back */}
         <Link

@@ -316,3 +316,14 @@
     radial-gradient(ellipse 70% 40% at 50% -10%, rgba(245, 158, 11, 0.1) 0%, transparent 70%),
     #080808;
 }
+
+/* ====================== ANTIGRAVITY ANIMATION ====================== */
+@keyframes antigravity {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-8px) rotate(0.5deg); }
+}
+
+.animate-antigravity {
+  animation: antigravity 4s ease-in-out infinite;
+}
+

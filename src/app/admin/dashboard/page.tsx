@@ -52,6 +52,7 @@ const STATUS_FILTERS: Array<{ value: FilterType; label: string }> = [
   { value: 'BUY', label: '🟢 Buy Orders' },
   { value: 'SELL', label: '🔴 Sell Orders' },
   { value: 'PENDING', label: 'Pending' },
+  { value: 'AWAITING_VERIFICATION', label: 'Awaiting Verification' },
   { value: 'IN_PROGRESS', label: 'In Progress' },
   { value: 'COMPLETED', label: 'Completed' },
   { value: 'CANCELLED', label: 'Cancelled' },
@@ -60,17 +61,19 @@ const STATUS_FILTERS: Array<{ value: FilterType; label: string }> = [
 function StatusBadge({ status }: { status: OrderStatus }) {
   const classes: Record<OrderStatus, string> = {
     PENDING: 'badge badge-pending',
+    AWAITING_VERIFICATION: 'badge badge-pending',
     IN_PROGRESS: 'badge badge-in-progress',
     COMPLETED: 'badge badge-completed',
     CANCELLED: 'badge badge-cancelled',
   }
   const labels: Record<OrderStatus, string> = {
     PENDING: '⏳ Pending',
+    AWAITING_VERIFICATION: '⏳ Awaiting Verification',
     IN_PROGRESS: '🔄 In Progress',
     COMPLETED: '✅ Completed',
     CANCELLED: '✗ Cancelled',
   }
-  return <span className={classes[status]}>{labels[status]}</span>
+  return <span className={classes[status] || 'badge badge-pending'}>{labels[status] || status}</span>
 }
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
