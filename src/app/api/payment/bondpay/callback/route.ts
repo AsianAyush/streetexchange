@@ -12,8 +12,9 @@
  *  1. Parse + validate the incoming payload
  *  2. Look up the order in Supabase by merchant_order_no
  *  3. Idempotency check — skip if already COMPLETED
- *  4. If status === "success", mark order COMPLETED and fire Discord alert
- *  5. Always respond HTTP 200 with { status: "ok", message: "Callback received successfully" }
+ *  4. If status === "success" or "pending", immediately set order to PROCESSING (locks UI / blocks repayment)
+ *  5. If status === "success", mark order COMPLETED and fire Discord alert
+ *  6. Always respond HTTP 200 with { status: "ok", message: "Callback received successfully" }
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -97,7 +98,27 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return OK_RESPONSE
   }
 
-  // 4. Process payment success
+  // 4. Immediately lock order to PROCESSING on any success/pending signal
+  //    This prevents the user from re-paying while the full completion flow runs.
+  if (status === 'success' || status === 'SUCCESS' || status === 'pending' || status === 'PENDING') {
+    const { error: lockErr } = await supabase
+      .from('orders')
+      .update({
+        status: 'PROCESSING',
+        gateway_order_no: orderNo ?? null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('merchant_order_no', merchantOrder)
+
+    if (lockErr) {
+      console.warn('[bondpay/callback] Failed to set PROCESSING status:', lockErr.message)
+      // Non-fatal — continue to attempt full completion
+    } else {
+      console.info('[bondpay/callback] Order locked to PROCESSING:', order.id)
+    }
+  }
+
+  // 5. Process payment success
   if (status === 'success' || status === 'SUCCESS') {
     const now = new Date().toISOString()
 
@@ -148,8 +169,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       console.warn('[bondpay/callback] Discord alert failed (non-fatal):', err)
     })
   } else {
-    // Log other status values for visibility (e.g. pending, failed)
-    console.info(`[bondpay/callback] Non-success status "${status}" for order ${order.id} — no action taken`)
+    // Log other status values for visibility (e.g. failed)
+    console.info(`[bondpay/callback] Status "${status}" for order ${order.id} — PROCESSING lock applied (if success/pending), no COMPLETED transition`)
   }
 
   return OK_RESPONSE

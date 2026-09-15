@@ -185,6 +185,10 @@ export default function OrderCheckoutPage() {
           if (updated.payment_gateway_ref) {
             setRefInput(updated.payment_gateway_ref)
           }
+          // Auto-redirect when BondPay webhook advances the order past PENDING
+          if (['PROCESSING', 'AWAITING_VERIFICATION', 'COMPLETED'].includes(updated.status ?? '')) {
+            router.push('/dashboard')
+          }
         }
       )
       .subscribe()
@@ -690,49 +694,58 @@ export default function OrderCheckoutPage() {
                   </div>
                 )}
 
-                <button
-                  id="bondpay-checkout-btn"
-                  type="button"
-                  disabled={bondPayLoading || order.status === 'COMPLETED' || order.status === 'CANCELLED'}
-                  onClick={async () => {
-                    setBondPayLoading(true)
-                    setBondPayError('')
-                    try {
-                      const { data: { session } } = await supabase.auth.getSession()
-                      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-                      if (session?.access_token) {
-                        headers['Authorization'] = `Bearer ${session.access_token}`
-                      }
+                {order.status === 'PENDING' ? (
+                  <button
+                    id="bondpay-checkout-btn"
+                    type="button"
+                    disabled={bondPayLoading}
+                    onClick={async () => {
+                      setBondPayLoading(true)
+                      setBondPayError('')
+                      try {
+                        const { data: { session } } = await supabase.auth.getSession()
+                        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+                        if (session?.access_token) {
+                          headers['Authorization'] = `Bearer ${session.access_token}`
+                        }
 
-                      const res = await fetch('/api/payment/bondpay/create', {
-                        method: 'POST',
-                        headers,
-                        body: JSON.stringify({ orderId: order.id }),
-                      })
-                      const data = await res.json()
-                      if (!res.ok || !data.payment_url) {
-                        throw new Error(data.error || 'Gateway error. Please try again.')
+                        const res = await fetch('/api/payment/bondpay/create', {
+                          method: 'POST',
+                          headers,
+                          body: JSON.stringify({ orderId: order.id }),
+                        })
+                        const data = await res.json()
+                        if (!res.ok || !data.payment_url) {
+                          throw new Error(data.error || 'Gateway error. Please try again.')
+                        }
+                        window.location.href = data.payment_url
+                      } catch (err: any) {
+                        setBondPayError(err?.message || 'Could not initiate payment. Please try again.')
+                        setBondPayLoading(false)
                       }
-                      window.location.href = data.payment_url
-                    } catch (err: any) {
-                      setBondPayError(err?.message || 'Could not initiate payment. Please try again.')
-                      setBondPayLoading(false)
-                    }
-                  }}
-                  className="w-full flex items-center justify-center gap-2.5 py-3.5 rounded-xl font-bold text-base bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-amber-500/20 cursor-pointer"
-                >
-                  {bondPayLoading ? (
-                    <>
-                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Connecting to BondPay...
-                    </>
-                  ) : (
-                    <>
-                      <Zap className="w-5 h-5" />
-                      Pay with BondPay (₹{Number(order.inr_amount).toLocaleString('en-IN')}) →
-                    </>
-                  )}
-                </button>
+                    }}
+                    className="w-full flex items-center justify-center gap-2.5 py-3.5 rounded-xl font-bold text-base bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-amber-500/20 cursor-pointer"
+                  >
+                    {bondPayLoading ? (
+                      <>
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Connecting to BondPay...
+                      </>
+                    ) : (
+                      <>
+                        <Zap className="w-5 h-5" />
+                        Pay with BondPay (₹{Number(order.inr_amount).toLocaleString('en-IN')}) →
+                      </>
+                    )}
+                  </button>
+                ) : (
+                  <div className="p-4 bg-slate-800 rounded-xl text-center animate-antigravity space-y-1 border border-slate-700">
+                    <p className="text-amber-400 font-semibold">⏳ Order Status: {order.status}</p>
+                    <p className="text-xs text-slate-400">
+                      Payment submitted and under verification. Re-payment is disabled.
+                    </p>
+                  </div>
+                )}
 
                 <p className="text-center text-xs text-slate-500">
                   <p>Don&apos;t close or refresh this page until payment is verified.</p>
