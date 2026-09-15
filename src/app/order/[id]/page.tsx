@@ -30,6 +30,8 @@ import {
   ArrowUpRight,
   ExternalLink,
   CreditCard,
+  Zap,
+  XCircle,
 } from 'lucide-react'
 
 type Order = Tables<'orders'>
@@ -67,6 +69,13 @@ export default function OrderCheckoutPage() {
   const [adminWallets, setAdminWallets] = useState<{ trc20?: string; bep20?: string }>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // Payment method settings
+  const [allowManualPayment, setAllowManualPayment] = useState<boolean | null>(null)
+
+  // BondPay gateway state
+  const [bondPayLoading, setBondPayLoading] = useState(false)
+  const [bondPayError, setBondPayError] = useState('')
 
   // Reference submission state (UTR for BUY, TXID for SELL)
   const [refInput, setRefInput] = useState('')
@@ -121,6 +130,30 @@ export default function OrderCheckoutPage() {
             trc20: map['admin_trc20_address'],
             bep20: map['admin_bep20_address'],
           })
+        }
+
+        // Fetch payment settings from system_settings or fallback to /api/admin/settings
+        try {
+          const { data: paymentSettings, error: psErr } = await supabase
+            .from('system_settings')
+            .select('value')
+            .eq('key', 'allow_manual_payment')
+            .maybeSingle()
+
+          if (!psErr && paymentSettings) {
+            const rawVal = paymentSettings.value
+            if (isMounted) setAllowManualPayment(rawVal === false || rawVal === 'false' ? false : true)
+          } else {
+            const res = await fetch('/api/admin/settings')
+            const data = await res.json()
+            if (isMounted && typeof data?.allow_manual_payment === 'boolean') {
+              setAllowManualPayment(data.allow_manual_payment)
+            } else if (isMounted) {
+              setAllowManualPayment(true)
+            }
+          }
+        } catch {
+          if (isMounted) setAllowManualPayment(true)
         }
 
         setLoading(false)
@@ -186,10 +219,32 @@ export default function OrderCheckoutPage() {
       )
       .subscribe()
 
+    // Realtime subscription for system_settings (manual payment toggle)
+    const settingsChannel = supabase
+      .channel(`system-settings-order-${orderId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'system_settings',
+        },
+        (payload) => {
+          if (!isMounted) return
+          const row = payload.new as { key?: string; value?: any }
+          if (row?.key === 'allow_manual_payment') {
+            const val = row.value
+            setAllowManualPayment(val === false || val === 'false' ? false : true)
+          }
+        }
+      )
+      .subscribe()
+
     return () => {
       isMounted = false
       supabase.removeChannel(channel)
       supabase.removeChannel(configsChannel)
+      supabase.removeChannel(settingsChannel)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderId, user?.id, authLoading])
@@ -573,6 +628,118 @@ export default function OrderCheckoutPage() {
           /* BUY USDT FLOW: Existing UPI Payment Section & Instructions                */
           /* ========================================================================= */
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-5 shadow-xl">
+
+            {/* ----------------------------------------------------------------- */}
+            {/* Case A: Manual payment is DISABLED — force BondPay                */}
+            {/* ----------------------------------------------------------------- */}
+            {allowManualPayment === false ? (
+              <>
+                <div className="flex items-start gap-3">
+                  <div className="p-3 bg-amber-500/10 text-amber-400 rounded-lg shrink-0">
+                    <Zap className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold flex items-center gap-2">
+                      Instant UPI Payment via BondPay
+                      <span className="text-xs font-normal px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                        Automatic Gateway
+                      </span>
+                    </h2>
+                    <p className="text-sm text-slate-400 mt-1">
+                      Manual payments are currently disabled. Please pay automatically using BondPay / Instant UPI.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Notice banner */}
+                <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm">
+                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-amber-400" />
+                  <p>
+                    <strong>Manual payments are currently disabled.</strong> Please pay automatically
+                    using <strong>BondPay / Instant UPI</strong>. You will be redirected to a
+                    secure payment page to complete your order.
+                  </p>
+                </div>
+
+                {/* Order summary */}
+                <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <span className="text-slate-400 block mb-0.5">Amount to Pay</span>
+                    <span className="font-bold text-white text-base">₹{Number(order.inr_amount).toLocaleString('en-IN')}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block mb-0.5">Receiving USDT</span>
+                    <span className="font-bold text-violet-400 text-base">{Number(order.usdt_amount).toFixed(4)} USDT</span>
+                  </div>
+                  <div className="col-span-2 pt-2 border-t border-slate-800 flex items-center justify-between">
+                    <span className="text-slate-400">Destination ({order.network ?? 'TRC20'})</span>
+                    <span className="font-mono text-slate-300 truncate max-w-[200px]" title={order.wallet_address || ''}>
+                      {order.wallet_address}
+                    </span>
+                  </div>
+                </div>
+
+                {/* BondPay CTA */}
+                {bondPayError && (
+                  <div className="flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+                    <XCircle className="w-4 h-4 shrink-0" />
+                    {bondPayError}
+                  </div>
+                )}
+
+                <button
+                  id="bondpay-checkout-btn"
+                  type="button"
+                  disabled={bondPayLoading || order.status === 'COMPLETED' || order.status === 'CANCELLED'}
+                  onClick={async () => {
+                    setBondPayLoading(true)
+                    setBondPayError('')
+                    try {
+                      const { data: { session } } = await supabase.auth.getSession()
+                      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+                      if (session?.access_token) {
+                        headers['Authorization'] = `Bearer ${session.access_token}`
+                      }
+
+                      const res = await fetch('/api/payment/bondpay/create', {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify({ orderId: order.id }),
+                      })
+                      const data = await res.json()
+                      if (!res.ok || !data.payment_url) {
+                        throw new Error(data.error || 'Gateway error. Please try again.')
+                      }
+                      window.location.href = data.payment_url
+                    } catch (err: any) {
+                      setBondPayError(err?.message || 'Could not initiate payment. Please try again.')
+                      setBondPayLoading(false)
+                    }
+                  }}
+                  className="w-full flex items-center justify-center gap-2.5 py-3.5 rounded-xl font-bold text-base bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-amber-500/20 cursor-pointer"
+                >
+                  {bondPayLoading ? (
+                    <>
+                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Connecting to BondPay...
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="w-5 h-5" />
+                      Pay with BondPay (₹{Number(order.inr_amount).toLocaleString('en-IN')}) →
+                    </>
+                  )}
+                </button>
+
+                <p className="text-center text-xs text-slate-500">
+                  You'll be securely redirected to BondPay's checkout. Do not close this tab.
+                </p>
+              </>
+            ) : (
+              /* ----------------------------------------------------------------- */
+              /* Case B: Manual payment is ENABLED — show existing UPI flow        */
+              /* ----------------------------------------------------------------- */
+              <>
             <div className="flex items-start gap-3">
               <div className="p-3 bg-blue-500/10 text-blue-400 rounded-lg shrink-0">
                 <Clock className="w-6 h-6 animate-spin" />
@@ -742,6 +909,8 @@ export default function OrderCheckoutPage() {
                 <strong>IN_PROGRESS</strong> / <strong>COMPLETED</strong>.
               </p>
             </div>
+            </>
+            )}
           </div>
         )}
 

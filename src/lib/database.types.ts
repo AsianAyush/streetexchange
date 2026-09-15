@@ -14,11 +14,14 @@ export type Database = {
           assigned_upi_id: string | null
           completed_at: string | null
           created_at: string
+          gateway_order_no: string | null
           id: string
           inr_amount: number
+          merchant_order_no: string | null
           network: Database["public"]["Enums"]["network_type_enum"]
           order_type: Database["public"]["Enums"]["order_type_enum"]
           payment_gateway_ref: string | null
+          payment_url: string | null
           rate_applied: number
           status: Database["public"]["Enums"]["order_status_enum"]
           updated_at: string
@@ -31,11 +34,14 @@ export type Database = {
           assigned_upi_id?: string | null
           completed_at?: string | null
           created_at?: string
+          gateway_order_no?: string | null
           id?: string
           inr_amount: number
+          merchant_order_no?: string | null
           network?: Database["public"]["Enums"]["network_type_enum"]
           order_type?: Database["public"]["Enums"]["order_type_enum"]
           payment_gateway_ref?: string | null
+          payment_url?: string | null
           rate_applied: number
           status?: Database["public"]["Enums"]["order_status_enum"]
           updated_at?: string
@@ -48,11 +54,14 @@ export type Database = {
           assigned_upi_id?: string | null
           completed_at?: string | null
           created_at?: string
+          gateway_order_no?: string | null
           id?: string
           inr_amount?: number
+          merchant_order_no?: string | null
           network?: Database["public"]["Enums"]["network_type_enum"]
           order_type?: Database["public"]["Enums"]["order_type_enum"]
           payment_gateway_ref?: string | null
+          payment_url?: string | null
           rate_applied?: number
           status?: Database["public"]["Enums"]["order_status_enum"]
           updated_at?: string
@@ -111,6 +120,7 @@ export type Database = {
           discord_id: string | null
           created_ip: string | null
           is_banned: boolean
+          is_admin?: boolean | null
         }
         Insert: {
           created_at?: string
@@ -122,6 +132,7 @@ export type Database = {
           discord_id?: string | null
           created_ip?: string | null
           is_banned?: boolean
+          is_admin?: boolean | null
         }
         Update: {
           created_at?: string
@@ -133,6 +144,7 @@ export type Database = {
           discord_id?: string | null
           created_ip?: string | null
           is_banned?: boolean
+          is_admin?: boolean | null
         }
         Relationships: []
       }
@@ -183,6 +195,24 @@ export type Database = {
           key?: string
           updated_at?: string
           value?: string
+        }
+        Relationships: []
+      }
+      system_settings: {
+        Row: {
+          key: string
+          updated_at: string
+          value: Json
+        }
+        Insert: {
+          key: string
+          updated_at?: string
+          value: Json
+        }
+        Update: {
+          key?: string
+          updated_at?: string
+          value?: Json
         }
         Relationships: []
       }

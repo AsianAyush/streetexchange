@@ -49,14 +49,17 @@ export default function AdminLoginPage() {
         return
       }
 
-      // 3. Verify ADMIN role
+      // 3. Verify ADMIN role or is_admin flag
       const { data: profile } = await supabase
         .from('profiles')
-        .select('role')
+        .select('role, is_admin')
         .eq('id', data.user.id)
         .single()
 
-      if (!profile || profile.role !== 'ADMIN') {
+      const roleStr = (profile?.role || '').toString().toUpperCase()
+      const isAdmin = roleStr === 'ADMIN' || profile?.is_admin === true
+
+      if (!profile || !isAdmin) {
         await supabase.auth.signOut()
         setError('Access denied. This portal is restricted to administrators only.')
         setLoading(false)

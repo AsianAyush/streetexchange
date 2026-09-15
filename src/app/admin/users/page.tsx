@@ -143,11 +143,14 @@ export default function AdminUsersPage() {
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('role, username, email')
+        .select('role, username, email, is_admin')
         .eq('id', user.id)
         .single()
 
-      if (!profile || profile.role !== 'ADMIN') {
+      const roleStr = (profile?.role || '').toString().toUpperCase()
+      const isAdmin = roleStr === 'ADMIN' || profile?.is_admin === true
+
+      if (!profile || !isAdmin) {
         router.push('/admin/login')
         return
       }

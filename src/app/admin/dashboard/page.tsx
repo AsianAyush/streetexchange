@@ -35,6 +35,10 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   Activity,
+  ToggleLeft,
+  ToggleRight,
+  CreditCard,
+  Zap,
 } from 'lucide-react'
 
 type Order = Tables<'orders'> & { profiles?: { username: string; email: string } }
@@ -127,6 +131,13 @@ export default function AdminDashboardPage() {
   const [assignError, setAssignError] = useState<Record<string, string>>({})
   const [assignSuccess, setAssignSuccess] = useState<Record<string, string>>({})
 
+  // Payment Gateway Settings state
+  const [allowManualPayment, setAllowManualPayment] = useState<boolean>(true)
+  const [paymentSettingLoading, setPaymentSettingLoading] = useState(false)
+  const [paymentSettingUpdating, setPaymentSettingUpdating] = useState(false)
+  const [paymentSettingSuccess, setPaymentSettingSuccess] = useState(false)
+  const [paymentSettingError, setPaymentSettingError] = useState('')
+
   // fetchOrders — defined before any useEffect that references it (const is NOT hoisted)
   const fetchOrders = useCallback(async () => {
     setLoadingOrders(true)
@@ -157,11 +168,15 @@ export default function AdminDashboardPage() {
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('role, username, email')
+        .select('role, username, email, is_admin')
         .eq('id', user.id)
         .single()
 
-      if (!profile || profile.role !== 'ADMIN') {
+      const roleStr = (profile?.role || '').toString().toUpperCase()
+      const isAdmin = roleStr === 'ADMIN' || profile?.is_admin === true
+
+      if (!profile || !isAdmin) {
+        console.warn('Unauthorized admin access attempt:', user.email, profile)
         router.push('/admin/login')
         return
       }
@@ -201,6 +216,25 @@ export default function AdminDashboardPage() {
 
     // Fetch all orders with user info via join
     fetchOrders()
+
+    // Fetch payment gateway settings
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      const headers: Record<string, string> = {}
+      if (session?.access_token) {
+        headers['Authorization'] = `Bearer ${session.access_token}`
+      }
+      fetch('/api/admin/settings', { headers })
+        .then((r) => r.json())
+        .then((data) => {
+          if (isMounted && typeof data.allow_manual_payment === 'boolean') {
+            setAllowManualPayment(data.allow_manual_payment)
+          }
+        })
+        .catch((err) => {
+          console.warn('Failed to load admin settings:', err)
+        })
+        .finally(() => { if (isMounted) setPaymentSettingLoading(false) })
+    })
 
     // Realtime subscriptions
     const ratesChannel = supabase.channel('admin-rates')
@@ -377,6 +411,35 @@ export default function AdminDashboardPage() {
   const handleSignOut = async () => {
     await supabase.auth.signOut()
     router.push('/admin/login')
+  }
+
+  const handleToggleManualPayment = async () => {
+    const newValue = !allowManualPayment
+    setPaymentSettingUpdating(true)
+    setPaymentSettingError('')
+    setPaymentSettingSuccess(false)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (session?.access_token) {
+        headers['Authorization'] = `Bearer ${session.access_token}`
+      }
+
+      const res = await fetch('/api/admin/settings', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ allow_manual_payment: newValue }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to update setting')
+      setAllowManualPayment(newValue)
+      setPaymentSettingSuccess(true)
+      setTimeout(() => setPaymentSettingSuccess(false), 3000)
+    } catch (err: any) {
+      setPaymentSettingError(err?.message || 'Failed to update payment setting.')
+    } finally {
+      setPaymentSettingUpdating(false)
+    }
   }
 
   const toggleUserStats = (orderId: string) => {
@@ -638,6 +701,97 @@ export default function AdminDashboardPage() {
               <div className="flex items-center gap-1.5 text-sm text-emerald-400 animate-fade-in-up">
                 <Check className="w-4 h-4" />
                 System deposit addresses updated! All Sell USDT checkouts now show these addresses.
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Payment Gateway Settings Panel */}
+        <div className="bg-card p-6 rounded-2xl border border-white/5 space-y-5">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+            <h2 className="font-bold text-white flex items-center gap-2">
+              <CreditCard className="w-4 h-4 text-cyan-400" />
+              Payment Gateway Settings
+            </h2>
+            <span className="text-xs text-white/30 ml-auto">
+              Platform-wide payment controls
+            </span>
+          </div>
+
+          <p className="text-xs text-white/40">
+            Toggle manual UPI payment on or off for <strong>all users</strong>. When disabled, users
+            on the Buy checkout page will only be able to pay via the <strong>BondPay</strong> instant
+            gateway — the manual QR/UTR entry option is hidden.
+          </p>
+
+          {/* Toggle Row */}
+          <div className="flex items-center justify-between bg-white/3 rounded-xl p-4 border border-white/5">
+            <div className="flex items-center gap-3">
+              <div className={`p-2.5 rounded-lg ${
+                allowManualPayment ? 'bg-emerald-500/15' : 'bg-amber-500/15'
+              }`}>
+                {allowManualPayment
+                  ? <QrCode className="w-5 h-5 text-emerald-400" />
+                  : <Zap className="w-5 h-5 text-amber-400" />}
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-white">
+                  Allow Manual Payment / UPI Submissions
+                </p>
+                <p className="text-xs text-white/40 mt-0.5">
+                  {allowManualPayment
+                    ? 'Manual UPI / QR code payments are currently ENABLED platform-wide'
+                    : 'Manual payments are DISABLED — users must use BondPay / Instant UPI'}
+                </p>
+              </div>
+            </div>
+
+            {/* Animated toggle switch */}
+            <button
+              id="admin-manual-payment-toggle"
+              type="button"
+              onClick={handleToggleManualPayment}
+              disabled={paymentSettingUpdating}
+              aria-pressed={allowManualPayment}
+              aria-label="Toggle manual payment"
+              className={`relative inline-flex h-7 w-14 shrink-0 items-center rounded-full transition-colors duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-black disabled:opacity-50 ${
+                allowManualPayment
+                  ? 'bg-emerald-500 focus-visible:ring-emerald-500'
+                  : 'bg-white/15 focus-visible:ring-amber-500'
+              }`}
+            >
+              <span
+                className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform duration-300 ${
+                  allowManualPayment ? 'translate-x-8' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Status / feedback row */}
+          <div className="flex items-center gap-3">
+            <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+              allowManualPayment
+                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+            }`}>
+              {allowManualPayment
+                ? <><ToggleRight className="w-3.5 h-3.5" /> Manual Payment: ON</>
+                : <><ToggleLeft className="w-3.5 h-3.5" /> Manual Payment: OFF — BondPay Only</>}
+            </div>
+            {paymentSettingUpdating && (
+              <div className="w-4 h-4 border-2 border-white/20 border-t-white/70 rounded-full animate-spin" />
+            )}
+            {paymentSettingSuccess && (
+              <div className="flex items-center gap-1.5 text-sm text-emerald-400 animate-fade-in-up">
+                <Check className="w-4 h-4" />
+                Setting updated! Changes are live for all users.
+              </div>
+            )}
+            {paymentSettingError && (
+              <div className="flex items-center gap-1.5 text-sm text-red-400">
+                <AlertCircle className="w-3.5 h-3.5" /> {paymentSettingError}
               </div>
             )}
           </div>
