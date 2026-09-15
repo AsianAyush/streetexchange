@@ -95,6 +95,10 @@ export default function DashboardPage() {
   const [inrAmount, setInrAmount] = useState('')
   const [sellUsdtAmount, setSellUsdtAmount] = useState('')
   const [network, setNetwork] = useState<Network>('TRC20')
+  const [networkAddresses, setNetworkAddresses] = useState<Record<Network, string>>({
+    TRC20: '',
+    BEP20: '',
+  })
   const [walletAddress, setWalletAddress] = useState('')
   const [userPayoutDetails, setUserPayoutDetails] = useState('')
   const [inrError, setInrError] = useState('')
@@ -134,6 +138,7 @@ export default function DashboardPage() {
       }
       if (addrParam) {
         setWalletAddress(addrParam)
+        setNetworkAddresses((prev) => ({ ...prev, [initialNet]: addrParam }))
         setAddrError(validateWalletAddress(addrParam, initialNet).error || '')
       }
       if (payoutParam) {
@@ -231,6 +236,7 @@ export default function DashboardPage() {
 
   const handleAddrChange = (val: string) => {
     setWalletAddress(val)
+    setNetworkAddresses((prev) => ({ ...prev, [network]: val }))
     if (val) setAddrError(validateWalletAddress(val, network).error || '')
     else setAddrError('')
   }
@@ -248,8 +254,13 @@ export default function DashboardPage() {
 
   const handleNetworkChange = (newNetwork: Network) => {
     setNetwork(newNetwork)
-    setWalletAddress('')
-    setAddrError('')
+    const existing = networkAddresses[newNetwork] || ''
+    setWalletAddress(existing)
+    if (existing) {
+      setAddrError(validateWalletAddress(existing, newNetwork).error || '')
+    } else {
+      setAddrError('')
+    }
   }
 
   const inrNum = parseFloat(inrAmount) || 0
@@ -312,9 +323,9 @@ export default function DashboardPage() {
       const validation = validateWalletAddress(walletAddress, network)
       if (!validation.valid) {
         if (network === 'TRC20') {
-          setSubmitError('Invalid TRC-20 Address. Must start with "T" and be 34 characters long.')
+          setSubmitError(validation.error || 'Invalid TRC-20 Address. Must start with "T" and be 34 characters long.')
         } else {
-          setSubmitError('Invalid BEP-20 Address. Must start with "0x" followed by 40 hex characters.')
+          setSubmitError(validation.error || 'BEP20 address must be 42 characters starting with 0x')
         }
         return
       }
@@ -723,9 +734,15 @@ export default function DashboardPage() {
                     <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
                       <AlertCircle className="w-3 h-3" /> {addrError}
                     </p>
-                  ) : isAddressValid && walletAddress && (
+                  ) : isAddressValid && walletAddress ? (
                     <p className="text-xs text-emerald-400 mt-1 flex items-center gap-1">
                       <CheckCircle2 className="w-3 h-3" /> Valid {network === 'TRC20' ? 'TRC-20' : 'BEP-20'} address
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-white/40 mt-1">
+                      {network === 'BEP20'
+                        ? 'BEP20 address must be 42 characters starting with 0x'
+                        : 'TRC20 address must be 34 characters starting with T'}
                     </p>
                   )}
                 </div>

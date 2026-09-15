@@ -10,12 +10,44 @@ import { sendDiscordOrderAlert, checkOrderCreationAllowed } from '@/lib/createOr
 export function CreateOrderForm({ liveRate }: { liveRate: number }) {
   const [inrAmount, setInrAmount] = useState<number>(1000)
   const [network, setNetwork] = useState<Network>('TRC20')
+  const [networkAddresses, setNetworkAddresses] = useState<Record<Network, string>>({
+    TRC20: '',
+    BEP20: '',
+  })
   const [walletAddress, setWalletAddress] = useState<string>('')
   const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
 
   const supabase = createClient()
   const router = useRouter()
+
+  const handleNetworkChange = (newNet: Network) => {
+    setNetwork(newNet)
+    setError(null)
+    const existing = networkAddresses[newNet] || ''
+    setWalletAddress(existing)
+    if (existing) {
+      const res = validateWalletAddress(existing, newNet)
+      if (!res.valid) {
+        setError(res.error || (newNet === 'TRC20' ? 'Invalid TRC-20 Address. Must start with "T" and be 34 characters long.' : 'BEP20 address must be 42 characters starting with 0x'))
+      }
+    }
+  }
+
+  const handleAddressChange = (val: string) => {
+    setWalletAddress(val)
+    setNetworkAddresses((prev) => ({ ...prev, [network]: val }))
+    if (val) {
+      const res = validateWalletAddress(val, network)
+      if (!res.valid) {
+        setError(res.error || (network === 'TRC20' ? 'Invalid TRC-20 Address. Must start with "T" and be 34 characters long.' : 'BEP20 address must be 42 characters starting with 0x'))
+      } else {
+        setError(null)
+      }
+    } else {
+      setError(null)
+    }
+  }
 
   const handleCreateOrder = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -31,9 +63,9 @@ export function CreateOrderForm({ liveRate }: { liveRate: number }) {
     const validation = validateWalletAddress(walletAddress, network)
     if (!validation.valid) {
       if (network === 'TRC20') {
-        setError('Invalid TRC-20 Address. Must start with "T" and be 34 characters long.')
+        setError(validation.error || 'Invalid TRC-20 Address. Must start with "T" and be 34 characters long.')
       } else {
-        setError('Invalid BEP-20 Address. Must start with "0x" followed by 40 hex characters.')
+        setError(validation.error || 'BEP20 address must be 42 characters starting with 0x')
       }
       return
     }
@@ -132,7 +164,7 @@ export function CreateOrderForm({ liveRate }: { liveRate: number }) {
         <div className="grid grid-cols-2 gap-3">
           <button
             type="button"
-            onClick={() => { setNetwork('TRC20'); setWalletAddress(''); setError(null); }}
+            onClick={() => handleNetworkChange('TRC20')}
             className={`py-2.5 px-4 rounded-lg text-sm font-semibold border transition-all flex items-center justify-center gap-2 ${
               network === 'TRC20'
                 ? 'bg-red-600 border-red-500 text-white shadow-lg shadow-red-600/20'
@@ -144,7 +176,7 @@ export function CreateOrderForm({ liveRate }: { liveRate: number }) {
           </button>
           <button
             type="button"
-            onClick={() => { setNetwork('BEP20'); setWalletAddress(''); setError(null); }}
+            onClick={() => handleNetworkChange('BEP20')}
             className={`py-2.5 px-4 rounded-lg text-sm font-semibold border transition-all flex items-center justify-center gap-2 ${
               network === 'BEP20'
                 ? 'bg-amber-600 border-amber-500 text-white shadow-lg shadow-amber-600/20'
@@ -183,11 +215,17 @@ export function CreateOrderForm({ liveRate }: { liveRate: number }) {
         <input
           type="text"
           value={walletAddress}
-          onChange={(e) => setWalletAddress(e.target.value)}
-          placeholder={network === 'TRC20' ? 'T...' : '0x...'}
+          onChange={(e) => handleAddressChange(e.target.value)}
+          placeholder={network === 'TRC20' ? 'T... (34 characters)' : '0x... (42 characters)'}
+          maxLength={network === 'TRC20' ? 34 : 42}
           className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white font-mono text-sm focus:outline-none focus:border-blue-500"
           required
         />
+        <p className="text-[11px] text-slate-400 mt-1">
+          {network === 'BEP20'
+            ? 'BEP20 address must be 42 characters starting with 0x'
+            : 'TRC20 address must be 34 characters starting with T'}
+        </p>
       </div>
 
       {error && <div className="p-3 bg-red-500/10 border border-red-500/30 text-red-400 rounded-lg text-xs">{error}</div>}

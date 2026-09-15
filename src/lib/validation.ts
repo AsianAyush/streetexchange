@@ -41,21 +41,12 @@ export function validateTRC20Address(address: string): AddressValidationResult {
 export function validateBEP20Address(address: string): AddressValidationResult {
   const trimmed = address.trim();
   if (!trimmed) {
-    return { valid: false, error: 'BEP-20 address is required.' };
+    return { valid: false, error: 'BEP20 address is required.' };
   }
-  if (!trimmed.startsWith('0x')) {
-    return { valid: false, error: "BEP-20 addresses must start with '0x'." };
-  }
-  if (trimmed.length !== 42) {
+  if (!trimmed.startsWith('0x') || trimmed.length !== 42 || !BEP20_REGEX.test(trimmed)) {
     return {
       valid: false,
-      error: `Address must be exactly 42 characters (current: ${trimmed.length}).`,
-    };
-  }
-  if (!BEP20_REGEX.test(trimmed)) {
-    return {
-      valid: false,
-      error: 'Invalid hexadecimal characters. Must be 0x followed by 40 hex characters.',
+      error: 'BEP20 address must be 42 characters starting with 0x',
     };
   }
   return { valid: true };

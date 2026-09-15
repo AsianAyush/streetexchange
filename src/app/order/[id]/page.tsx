@@ -346,7 +346,7 @@ export default function OrderCheckoutPage() {
   const isSell = order.order_type === 'SELL'
 
   const activeAdminWallet = order.network === 'BEP20'
-    ? (adminWallets.bep20 || '0xExampleAdminBEP20WalletAddressHere0000')
+    ? (adminWallets.bep20 || '0x000000000000000000000000000000000000dEaD')
     : (adminWallets.trc20 || 'TExampleAdminTRC20WalletAddressHere34')
 
   return (
