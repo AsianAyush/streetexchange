@@ -732,7 +732,7 @@ export default function OrderCheckoutPage() {
                 </button>
 
                 <p className="text-center text-xs text-slate-500">
-                  You&apos;ll be securely redirected to BondPay&apos;s checkout. Do not close this tab.
+                  <p>Don&apos;t close or refresh this page until payment is verified.</p>
                 </p>
               </>
             ) : (
