@@ -14,6 +14,7 @@ import { formatIST } from '@/lib/dateUtils'
 import {
   validateINRAmount,
   validateUSDTAmount,
+  validateCryptoAddress,
   validateWalletAddress,
   Network,
   calcUSDTFromINR,
@@ -139,7 +140,8 @@ export default function DashboardPage() {
       if (addrParam) {
         setWalletAddress(addrParam)
         setNetworkAddresses((prev) => ({ ...prev, [initialNet]: addrParam }))
-        setAddrError(validateWalletAddress(addrParam, initialNet).error || '')
+        const err = validateCryptoAddress(addrParam, initialNet)
+        if (err) setAddrError(err)
       }
       if (payoutParam) {
         setUserPayoutDetails(payoutParam)
@@ -237,8 +239,12 @@ export default function DashboardPage() {
   const handleAddrChange = (val: string) => {
     setWalletAddress(val)
     setNetworkAddresses((prev) => ({ ...prev, [network]: val }))
-    if (val) setAddrError(validateWalletAddress(val, network).error || '')
-    else setAddrError('')
+    if (val.trim()) {
+      const err = validateCryptoAddress(val, network)
+      setAddrError(err || '')
+    } else {
+      setAddrError('')
+    }
   }
 
   const handlePayoutChange = (val: string) => {
@@ -254,12 +260,12 @@ export default function DashboardPage() {
 
   const handleNetworkChange = (newNetwork: Network) => {
     setNetwork(newNetwork)
+    setAddrError('')
     const existing = networkAddresses[newNetwork] || ''
     setWalletAddress(existing)
-    if (existing) {
-      setAddrError(validateWalletAddress(existing, newNetwork).error || '')
-    } else {
-      setAddrError('')
+    if (existing && existing.trim()) {
+      const err = validateCryptoAddress(existing, newNetwork)
+      setAddrError(err || '')
     }
   }
 
@@ -270,7 +276,7 @@ export default function DashboardPage() {
   const buyUsdtResult = calcUSDTFromINR(inrNum, activeRate)
   const sellInrResult = calcINRFromUSDT(sellUsdtNum, activeRate)
 
-  const isAddressValid = orderType === 'BUY' ? validateWalletAddress(walletAddress, network).valid : true
+  const isAddressValid = orderType === 'BUY' ? !validateCryptoAddress(walletAddress, network) : true
   const isPayoutValid = orderType === 'SELL' ? (userPayoutDetails.trim().length >= 4 && !payoutError) : true
 
   const isBuyValid =
@@ -320,13 +326,9 @@ export default function DashboardPage() {
 
     // 2. Buy vs Sell validation
     if (orderType === 'BUY') {
-      const validation = validateWalletAddress(walletAddress, network)
-      if (!validation.valid) {
-        if (network === 'TRC20') {
-          setSubmitError(validation.error || 'Invalid TRC-20 Address. Must start with "T" and be 34 characters long.')
-        } else {
-          setSubmitError(validation.error || 'BEP20 address must be 42 characters starting with 0x')
-        }
+      const addressError = validateCryptoAddress(walletAddress, network)
+      if (addressError) {
+        setSubmitError(addressError)
         return
       }
     } else {
@@ -727,22 +729,21 @@ export default function DashboardPage() {
                     value={walletAddress}
                     onChange={(e) => handleAddrChange(e.target.value)}
                     placeholder={network === 'TRC20' ? 'T... (34 characters)' : '0x... (42 characters)'}
-                    className={`input-field font-mono text-xs ${addrError ? 'error' : isAddressValid && walletAddress ? 'success' : ''}`}
-                    maxLength={network === 'TRC20' ? 34 : 42}
+                    className={`input-field font-mono text-xs ${addrError ? 'error' : isAddressValid && walletAddress.trim() ? 'success' : ''}`}
                   />
                   {addrError ? (
                     <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
                       <AlertCircle className="w-3 h-3" /> {addrError}
                     </p>
-                  ) : isAddressValid && walletAddress ? (
+                  ) : isAddressValid && walletAddress.trim() ? (
                     <p className="text-xs text-emerald-400 mt-1 flex items-center gap-1">
                       <CheckCircle2 className="w-3 h-3" /> Valid {network === 'TRC20' ? 'TRC-20' : 'BEP-20'} address
                     </p>
                   ) : (
                     <p className="text-[11px] text-white/40 mt-1">
                       {network === 'BEP20'
-                        ? 'BEP20 address must be 42 characters starting with 0x'
-                        : 'TRC20 address must be 34 characters starting with T'}
+                        ? 'Must be a valid 42-character address starting with 0x'
+                        : 'Must be a valid 34-character address starting with T'}
                     </p>
                   )}
                 </div>

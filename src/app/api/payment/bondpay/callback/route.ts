@@ -104,7 +104,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const { error: lockErr } = await supabase
       .from('orders')
       .update({
-        status: 'PROCESSING',
+        status: 'IN_PROGRESS',
         gateway_order_no: orderNo ?? null,
         updated_at: new Date().toISOString(),
       })

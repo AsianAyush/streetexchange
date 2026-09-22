@@ -153,8 +153,10 @@ export default function AdminDashboardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase])
 
-  // Stats
-  const totalVolume = orders.reduce((s, o) => s + Number(o.inr_amount), 0)
+  // Stats — revenue strictly from COMPLETED orders only
+  const totalRevenue = orders
+    .filter((o) => o.status === 'COMPLETED')
+    .reduce((s, o) => s + Number(o.inr_amount), 0)
   const completedCount = orders.filter((o) => o.status === 'COMPLETED').length
   const inProgressCount = orders.filter((o) => o.status === 'IN_PROGRESS').length
   const buyCount = orders.filter((o) => (o.order_type || 'BUY') === 'BUY').length
@@ -521,7 +523,7 @@ export default function AdminDashboardPage() {
         {/* Stats Grid */}
         <div className="grid grid-cols-2 lg:grid-cols-6 gap-4">
           {[
-            { label: 'Total Volume', value: `₹${(totalVolume / 100000).toFixed(2)}L`, icon: TrendingUp, color: 'violet' },
+            { label: 'Revenue (Completed)', value: `₹${(totalRevenue / 100000).toFixed(2)}L`, icon: TrendingUp, color: 'violet' },
             { label: 'Buy Orders', value: String(buyCount), icon: ArrowDownLeft, color: 'emerald' },
             { label: 'Sell Orders', value: String(sellCount), icon: ArrowUpRight, color: 'rose' },
             { label: 'Awaiting UPI', value: String(awaitingUpiCount), icon: Clock, color: 'amber' },

@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { validateWalletAddress, Network } from '@/lib/validation'
+import { validateCryptoAddress, Network } from '@/lib/validation'
 import { Trc20Logo, Bep20Logo } from '@/components/NetworkLogos'
 import { sendDiscordOrderAlert, checkOrderCreationAllowed } from '@/lib/createOrderGuard'
 
@@ -26,10 +26,10 @@ export function CreateOrderForm({ liveRate }: { liveRate: number }) {
     setError(null)
     const existing = networkAddresses[newNet] || ''
     setWalletAddress(existing)
-    if (existing) {
-      const res = validateWalletAddress(existing, newNet)
-      if (!res.valid) {
-        setError(res.error || (newNet === 'TRC20' ? 'Invalid TRC-20 Address. Must start with "T" and be 34 characters long.' : 'BEP20 address must be 42 characters starting with 0x'))
+    if (existing && existing.trim()) {
+      const err = validateCryptoAddress(existing, newNet)
+      if (err) {
+        setError(err)
       }
     }
   }
@@ -37,13 +37,9 @@ export function CreateOrderForm({ liveRate }: { liveRate: number }) {
   const handleAddressChange = (val: string) => {
     setWalletAddress(val)
     setNetworkAddresses((prev) => ({ ...prev, [network]: val }))
-    if (val) {
-      const res = validateWalletAddress(val, network)
-      if (!res.valid) {
-        setError(res.error || (network === 'TRC20' ? 'Invalid TRC-20 Address. Must start with "T" and be 34 characters long.' : 'BEP20 address must be 42 characters starting with 0x'))
-      } else {
-        setError(null)
-      }
+    if (val.trim()) {
+      const err = validateCryptoAddress(val, network)
+      setError(err)
     } else {
       setError(null)
     }
@@ -60,13 +56,9 @@ export function CreateOrderForm({ liveRate }: { liveRate: number }) {
     }
 
     // 2. Network Address Regex Validation
-    const validation = validateWalletAddress(walletAddress, network)
-    if (!validation.valid) {
-      if (network === 'TRC20') {
-        setError(validation.error || 'Invalid TRC-20 Address. Must start with "T" and be 34 characters long.')
-      } else {
-        setError(validation.error || 'BEP20 address must be 42 characters starting with 0x')
-      }
+    const addressError = validateCryptoAddress(walletAddress, network)
+    if (addressError) {
+      setError(addressError)
       return
     }
 
@@ -217,18 +209,21 @@ export function CreateOrderForm({ liveRate }: { liveRate: number }) {
           value={walletAddress}
           onChange={(e) => handleAddressChange(e.target.value)}
           placeholder={network === 'TRC20' ? 'T... (34 characters)' : '0x... (42 characters)'}
-          maxLength={network === 'TRC20' ? 34 : 42}
           className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white font-mono text-sm focus:outline-none focus:border-blue-500"
           required
         />
         <p className="text-[11px] text-slate-400 mt-1">
           {network === 'BEP20'
-            ? 'BEP20 address must be 42 characters starting with 0x'
-            : 'TRC20 address must be 34 characters starting with T'}
+            ? 'Must be a valid 42-character address starting with 0x'
+            : 'Must be a valid 34-character address starting with T'}
         </p>
       </div>
 
-      {error && <div className="p-3 bg-red-500/10 border border-red-500/30 text-red-400 rounded-lg text-xs">{error}</div>}
+      {error && (
+        <div className="p-3 bg-red-500/10 border border-red-500/30 text-red-400 rounded-lg text-xs">
+          {error}
+        </div>
+      )}
 
       <button
         type="submit"

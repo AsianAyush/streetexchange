@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -77,11 +77,24 @@ export default function OrderCheckoutPage() {
   const [bondPayLoading, setBondPayLoading] = useState(false)
   const [bondPayError, setBondPayError] = useState('')
 
+  // BondPay auto-retry state
+  const [isRetrying, setIsRetrying] = useState(false)
+  const [retryTimeLeft, setRetryTimeLeft] = useState(300) // 5 min in seconds
+  const [retryNextIn, setRetryNextIn] = useState(0)      // seconds until next attempt
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const retryAbortRef = useRef(false)
+
   // Reference submission state (UTR for BUY, TXID for SELL)
   const [refInput, setRefInput] = useState('')
   const [refError, setRefError] = useState('')
   const [submittingRef, setSubmittingRef] = useState(false)
   const [refSuccess, setRefSuccess] = useState(false)
+
+  // Order action state (Cancel / Mark Paid)
+  type ActionModal = 'CANCEL' | 'MARK_PAID' | null
+  const [activeModal, setActiveModal] = useState<ActionModal>(null)
+  const [actionLoading, setActionLoading] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   // Auth guard — redirect to login if not authenticated
   useEffect(() => {
@@ -253,6 +266,94 @@ export default function OrderCheckoutPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderId, user?.id, authLoading])
 
+  // Format seconds as MM:SS
+  const formatCountdown = (secs: number) => {
+    const m = Math.floor(secs / 60).toString().padStart(2, '0')
+    const s = (secs % 60).toString().padStart(2, '0')
+    return `${m}:${s}`
+  }
+
+  const cancelRetry = () => {
+    retryAbortRef.current = true
+    if (countdownRef.current) clearInterval(countdownRef.current)
+    setIsRetrying(false)
+    setRetryTimeLeft(300)
+    setRetryNextIn(0)
+  }
+
+  const handleBondPayWithRetry = async () => {
+    if (!order) return
+    retryAbortRef.current = false
+    setIsRetrying(true)
+    setBondPayError('')
+    setRetryTimeLeft(300)
+    setRetryNextIn(0)
+
+    const MAX_DURATION = 5 * 60 * 1000 // 5 minutes
+    const RETRY_DELAY = 8000           // 8 seconds between attempts
+    const startTime = Date.now()
+
+    // Start the 5-minute master countdown
+    countdownRef.current = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000)
+      const remaining = Math.max(0, 300 - elapsed)
+      setRetryTimeLeft(remaining)
+    }, 500)
+
+    const attemptCreate = async (): Promise<string | null> => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+        if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
+
+        const res = await fetch('/api/payment/bondpay/create', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ orderId: order.id }),
+        })
+        const data = await res.json()
+        if (data?.payment_url) return data.payment_url
+      } catch (err) {
+        console.error('BondPay fetch error, retrying...', err)
+      }
+      return null
+    }
+
+    while (Date.now() - startTime < MAX_DURATION) {
+      if (retryAbortRef.current) break
+
+      const paymentUrl = await attemptCreate()
+      if (paymentUrl) {
+        if (countdownRef.current) clearInterval(countdownRef.current)
+        window.location.href = paymentUrl
+        return
+      }
+
+      if (retryAbortRef.current) break
+
+      // Count down the 8-second inter-attempt delay
+      for (let i = RETRY_DELAY / 1000; i > 0; i--) {
+        if (retryAbortRef.current) break
+        if (Date.now() - startTime >= MAX_DURATION) break
+        setRetryNextIn(i)
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+      }
+      setRetryNextIn(0)
+    }
+
+    if (countdownRef.current) clearInterval(countdownRef.current)
+
+    if (!retryAbortRef.current) {
+      // Timed out — show error
+      setBondPayError(
+        'Payment gateway busy. Please try manual payment or try again in a few minutes.'
+      )
+    }
+    setIsRetrying(false)
+    setRetryTimeLeft(300)
+    setRetryNextIn(0)
+  }
+
   const handleRefSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!order) return
@@ -308,6 +409,48 @@ export default function OrderCheckoutPage() {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Order action handler (CANCEL / MARK_PAID)
+  // ---------------------------------------------------------------------------
+  const handleOrderAction = useCallback(async (action: 'CANCEL' | 'MARK_PAID') => {
+    if (!order) return
+    setActionLoading(true)
+    setActionError(null)
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
+
+      const res = await fetch('/api/order/action', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ orderId: order.id, action }),
+      })
+      const data = await res.json()
+
+      if (!res.ok) {
+        setActionError(data?.error || 'Something went wrong. Please try again.')
+        return
+      }
+
+      // Refresh server-side state immediately upon successful response
+      router.refresh()
+
+      // Optimistically update local state
+      setOrder((prev) => prev ? { ...prev, status: data.status } : prev)
+      setActiveModal(null)
+
+      // Redirect to dashboard after a brief moment
+      setTimeout(() => router.push('/dashboard'), 1200)
+    } catch (err: any) {
+      setActionError(err?.message || 'Network error. Please try again.')
+    } finally {
+      setActionLoading(false)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order, supabase, router])
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
@@ -350,6 +493,7 @@ export default function OrderCheckoutPage() {
     : (adminWallets.trc20 || 'TExampleAdminTRC20WalletAddressHere34')
 
   return (
+    <>
     <div className="min-h-screen bg-slate-950 text-white p-4 md:p-8">
       <div className="max-w-2xl mx-auto space-y-6 animate-antigravity">
 
@@ -687,7 +831,7 @@ export default function OrderCheckoutPage() {
                 </div>
 
                 {/* BondPay CTA */}
-                {bondPayError && (
+                {bondPayError && !isRetrying && (
                   <div className="flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
                     <XCircle className="w-4 h-4 shrink-0" />
                     {bondPayError}
@@ -695,49 +839,71 @@ export default function OrderCheckoutPage() {
                 )}
 
                 {order.status === 'PENDING' ? (
+                  isRetrying ? (
+                    /* ---- Auto-retry UI card ---- */
+                    <div className="rounded-xl border border-amber-500/30 bg-gradient-to-br from-amber-950/40 to-slate-900 p-5 space-y-4 shadow-lg shadow-amber-900/20 animate-pulse-slow">
+                      {/* Header row */}
+                      <div className="flex items-center gap-3">
+                        <div className="shrink-0 w-10 h-10 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center">
+                          <RefreshCw className="w-5 h-5 text-amber-400 animate-spin" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-white leading-tight">
+                            Fetching payment gateway account…
+                          </p>
+                          <p className="text-xs text-amber-300/80 mt-0.5">
+                            {retryNextIn > 0
+                              ? `Retrying automatically in ${retryNextIn}s`
+                              : 'Connecting to BondPay…'}
+                          </p>
+                        </div>
+                        {/* MM:SS countdown badge */}
+                        <div className="shrink-0 flex flex-col items-center bg-slate-900 border border-amber-500/20 rounded-lg px-3 py-1.5">
+                          <span className="text-[10px] text-slate-500 uppercase tracking-widest">Time left</span>
+                          <span className="font-mono font-bold text-amber-400 text-lg leading-none tabular-nums">
+                            {formatCountdown(retryTimeLeft)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Progress bar */}
+                      <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-amber-500 to-orange-500 rounded-full transition-all duration-1000"
+                          style={{ width: `${(retryTimeLeft / 300) * 100}%` }}
+                        />
+                      </div>
+
+                      {/* Info note */}
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        The gateway may be temporarily busy assigning an account. We&apos;ll keep
+                        retrying every 8 seconds until a payment link is secured or the 5-minute
+                        window expires.
+                      </p>
+
+                      {/* Cancel button */}
+                      <button
+                        id="bondpay-retry-cancel-btn"
+                        type="button"
+                        onClick={cancelRetry}
+                        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-slate-600 text-slate-300 hover:text-white hover:border-slate-400 text-sm font-medium transition-colors"
+                      >
+                        <XCircle className="w-4 h-4" />
+                        Cancel — Use Manual UPI Instead
+                      </button>
+                    </div>
+                  ) : (
                   <button
                     id="bondpay-checkout-btn"
                     type="button"
                     disabled={bondPayLoading}
-                    onClick={async () => {
-                      setBondPayLoading(true)
-                      setBondPayError('')
-                      try {
-                        const { data: { session } } = await supabase.auth.getSession()
-                        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-                        if (session?.access_token) {
-                          headers['Authorization'] = `Bearer ${session.access_token}`
-                        }
-
-                        const res = await fetch('/api/payment/bondpay/create', {
-                          method: 'POST',
-                          headers,
-                          body: JSON.stringify({ orderId: order.id }),
-                        })
-                        const data = await res.json()
-                        if (!res.ok || !data.payment_url) {
-                          throw new Error(data.error || 'Gateway error. Please try again.')
-                        }
-                        window.location.href = data.payment_url
-                      } catch (err: any) {
-                        setBondPayError(err?.message || 'Could not initiate payment. Please try again.')
-                        setBondPayLoading(false)
-                      }
-                    }}
+                    onClick={handleBondPayWithRetry}
                     className="w-full flex items-center justify-center gap-2.5 py-3.5 rounded-xl font-bold text-base bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-amber-500/20 cursor-pointer"
                   >
-                    {bondPayLoading ? (
-                      <>
-                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Connecting to BondPay...
-                      </>
-                    ) : (
-                      <>
-                        <Zap className="w-5 h-5" />
-                        Pay with BondPay (₹{Number(order.inr_amount).toLocaleString('en-IN')}) →
-                      </>
-                    )}
+                    <Zap className="w-5 h-5" />
+                    Pay with BondPay (₹{Number(order.inr_amount).toLocaleString('en-IN')}) →
                   </button>
+                  )
                 ) : (
                   <div className="p-4 bg-slate-800 rounded-xl text-center animate-antigravity space-y-1 border border-slate-700">
                     <p className="text-amber-400 font-semibold">⏳ Order Status: {order.status}</p>
@@ -930,6 +1096,47 @@ export default function OrderCheckoutPage() {
           </div>
         )}
 
+        {/* ------------------------------------------------------------------ */}
+        {/* Action Buttons — visible only for PENDING orders                   */}
+        {/* ------------------------------------------------------------------ */}
+        {isPending && !isCancelled && (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3 shadow-xl">
+            <p className="text-xs text-slate-400 font-medium tracking-wide uppercase">
+              Order Actions
+            </p>
+            <div className="flex flex-col sm:flex-row gap-3">
+              {/* Mark Paid */}
+              <button
+                id="order-mark-paid-btn"
+                type="button"
+                onClick={() => { setActionError(null); setActiveModal('MARK_PAID') }}
+                className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold text-sm bg-gradient-to-r from-emerald-600 to-emerald-500 text-white hover:opacity-90 transition-opacity shadow-lg shadow-emerald-600/20"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                I Have Made the Payment
+              </button>
+
+              {/* Cancel Order */}
+              <button
+                id="order-cancel-btn"
+                type="button"
+                onClick={() => { setActionError(null); setActiveModal('CANCEL') }}
+                className="flex-1 sm:flex-none flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-semibold text-sm border border-red-500/40 text-red-400 hover:bg-red-500/10 hover:border-red-500/70 transition-all"
+              >
+                <AlertCircle className="w-4 h-4" />
+                Cancel Order
+              </button>
+            </div>
+
+            {actionError && (
+              <p className="text-xs text-red-400 flex items-center gap-1.5 pt-1">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                {actionError}
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Support & Community Section */}
         <div className="bg-gradient-to-r from-indigo-900/40 to-purple-900/40 border border-indigo-500/30 rounded-xl p-6 space-y-4 shadow-xl">
           <h3 className="text-base font-semibold text-indigo-200">Need Help or Instant Trade Support?</h3>
@@ -950,5 +1157,90 @@ export default function OrderCheckoutPage() {
 
       </div>
     </div>
+
+    {/* ====================================================================== */}
+    {/* Confirmation Modals                                                     */}
+    {/* ====================================================================== */}
+    {activeModal && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modal-title"
+      >
+        <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-sm w-full shadow-2xl space-y-5 animate-fade-in-up">
+
+          {/* Icon */}
+          <div className={`mx-auto w-14 h-14 rounded-full flex items-center justify-center ${
+            activeModal === 'CANCEL'
+              ? 'bg-red-500/10 border border-red-500/30'
+              : 'bg-emerald-500/10 border border-emerald-500/30'
+          }`}>
+            {activeModal === 'CANCEL'
+              ? <AlertCircle className="w-7 h-7 text-red-400" />
+              : <CheckCircle2 className="w-7 h-7 text-emerald-400" />}
+          </div>
+
+          {/* Title */}
+          <div className="text-center space-y-2">
+            <h2 id="modal-title" className="text-lg font-bold text-white">
+              {activeModal === 'CANCEL' ? 'Cancel This Order?' : 'Confirm Payment Made'}
+            </h2>
+            <p className="text-sm text-slate-400 leading-relaxed">
+              {activeModal === 'CANCEL'
+                ? 'Are you sure you want to cancel this order? This action cannot be undone.'
+                : 'Are you sure you have successfully completed the payment? False claims may lead to account suspension.'}
+            </p>
+          </div>
+
+          {/* Error */}
+          {actionError && (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-xs">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              {actionError}
+            </div>
+          )}
+
+          {/* Buttons */}
+          <div className="flex gap-3">
+            {/* Dismiss */}
+            <button
+              id="modal-dismiss-btn"
+              type="button"
+              disabled={actionLoading}
+              onClick={() => { setActiveModal(null); setActionError(null) }}
+              className="flex-1 py-2.5 rounded-xl border border-slate-700 text-slate-300 hover:border-slate-500 hover:text-white text-sm font-medium transition-colors disabled:opacity-50"
+            >
+              Go Back
+            </button>
+
+            {/* Confirm */}
+            <button
+              id={activeModal === 'CANCEL' ? 'modal-confirm-cancel-btn' : 'modal-confirm-paid-btn'}
+              type="button"
+              disabled={actionLoading}
+              onClick={() => handleOrderAction(activeModal)}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold text-white transition-opacity disabled:opacity-60 shadow-lg ${
+                activeModal === 'CANCEL'
+                  ? 'bg-red-600 hover:bg-red-500 shadow-red-600/20'
+                  : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-600/20'
+              }`}
+            >
+              {actionLoading ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Processing…
+                </>
+              ) : activeModal === 'CANCEL' ? (
+                'Yes, Cancel Order'
+              ) : (
+                'Yes, I Paid'
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+  </>
   )
 }

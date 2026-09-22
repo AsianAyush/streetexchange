@@ -1,10 +1,36 @@
 // =================== VALIDATION CONSTANTS ===================
 export const MIN_INR_AMOUNT = 1000;
 export const MAX_INR_AMOUNT = 50000;
-export const TRC20_REGEX = /^T[a-km-zA-HJ-NP-Z1-9]{33}$/;
+export const TRC20_REGEX = /^T[a-zA-Z0-9]{33}$/;
 export const BEP20_REGEX = /^0x[a-fA-F0-9]{40}$/;
 
 export type Network = 'TRC20' | 'BEP20';
+
+// Helper checks
+export const isBep20Valid = (addr: string) => /^0x[a-fA-F0-9]{40}$/.test(addr.trim());
+export const isTrc20Valid = (addr: string) => /^T[a-zA-Z0-9]{33}$/.test(addr.trim());
+
+// Address validation helper
+export const validateCryptoAddress = (address: string, network: 'TRC20' | 'BEP20'): string | null => {
+  const cleanAddr = address.trim();
+  if (!cleanAddr) return 'Address is required';
+
+  if (network === 'BEP20') {
+    const bep20Regex = /^0x[a-fA-F0-9]{40}$/;
+    if (!bep20Regex.test(cleanAddr)) {
+      return 'Invalid BEP20 address. Must be 42 characters starting with 0x';
+    }
+  }
+
+  if (network === 'TRC20') {
+    const trc20Regex = /^T[a-zA-Z0-9]{33}$/;
+    if (!trc20Regex.test(cleanAddr)) {
+      return 'Invalid TRC20 address. Must be 34 characters starting with T';
+    }
+  }
+
+  return null; // Valid!
+};
 
 // =================== WALLET ADDRESS VALIDATION ===================
 export interface AddressValidationResult {
@@ -16,49 +42,27 @@ export type TRC20ValidationResult = AddressValidationResult;
 export type BEP20ValidationResult = AddressValidationResult;
 
 export function validateTRC20Address(address: string): AddressValidationResult {
-  const trimmed = address.trim();
-  if (!trimmed) {
-    return { valid: false, error: 'TRC-20 address is required.' };
-  }
-  if (trimmed.length !== 34) {
-    return {
-      valid: false,
-      error: `Address must be exactly 34 characters (current: ${trimmed.length}).`,
-    };
-  }
-  if (!trimmed.startsWith('T')) {
-    return { valid: false, error: "TRC-20 addresses must begin with the letter 'T'." };
-  }
-  if (!TRC20_REGEX.test(trimmed)) {
-    return {
-      valid: false,
-      error: 'Invalid Base58 characters detected. Please verify your TRC-20 (TRON) address.',
-    };
+  const err = validateCryptoAddress(address, 'TRC20');
+  if (err) {
+    return { valid: false, error: err };
   }
   return { valid: true };
 }
 
 export function validateBEP20Address(address: string): AddressValidationResult {
-  const trimmed = address.trim();
-  if (!trimmed) {
-    return { valid: false, error: 'BEP20 address is required.' };
-  }
-  if (!trimmed.startsWith('0x') || trimmed.length !== 42 || !BEP20_REGEX.test(trimmed)) {
-    return {
-      valid: false,
-      error: 'BEP20 address must be 42 characters starting with 0x',
-    };
+  const err = validateCryptoAddress(address, 'BEP20');
+  if (err) {
+    return { valid: false, error: err };
   }
   return { valid: true };
 }
 
 export function validateWalletAddress(address: string, network: Network): AddressValidationResult {
-  if (network === 'TRC20') {
-    return validateTRC20Address(address);
-  } else if (network === 'BEP20') {
-    return validateBEP20Address(address);
+  const err = validateCryptoAddress(address, network);
+  if (err) {
+    return { valid: false, error: err };
   }
-  return { valid: false, error: 'Unsupported network selected.' };
+  return { valid: true };
 }
 
 // =================== INR AMOUNT VALIDATION ===================

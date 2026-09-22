@@ -12,6 +12,7 @@ import {
   validateINRAmount,
   validateUSDTAmount,
   validateTRC20Address,
+  validateCryptoAddress,
   validateWalletAddress,
   Network,
   MIN_INR_AMOUNT,
@@ -119,22 +120,21 @@ function QuickCalculator({ rates }: { rates: Rates | null }) {
 
   const handleNetworkChange = (net: Network) => {
     setNetwork(net)
+    setAddrError('')
     const existing = networkAddresses[net] || ''
     setAddress(existing)
-    if (existing) {
-      const res = validateWalletAddress(existing, net)
-      setAddrError(res.error || '')
-    } else {
-      setAddrError('')
+    if (existing && existing.trim()) {
+      const err = validateCryptoAddress(existing, net)
+      setAddrError(err || '')
     }
   }
 
   const handleAddrChange = (val: string) => {
     setAddress(val)
     setNetworkAddresses((prev) => ({ ...prev, [network]: val }))
-    if (val) {
-      const res = validateWalletAddress(val, network)
-      setAddrError(res.error || '')
+    if (val.trim()) {
+      const err = validateCryptoAddress(val, network)
+      setAddrError(err || '')
     } else {
       setAddrError('')
     }
@@ -151,7 +151,7 @@ function QuickCalculator({ rates }: { rates: Rates | null }) {
     }
   }
 
-  const isAddressValid = validateWalletAddress(address, network).valid
+  const isAddressValid = !validateCryptoAddress(address, network)
   const isPayoutValid = payoutDetails.trim().length >= 4 && !payoutError
 
   const canProceedBuy =
@@ -293,23 +293,22 @@ function QuickCalculator({ rates }: { rates: Rates | null }) {
               value={address}
               onChange={(e) => handleAddrChange(e.target.value)}
               placeholder={network === 'TRC20' ? 'T... (34 characters)' : '0x... (42 characters)'}
-              className={`input-field font-mono text-xs ${addrError ? 'error' : isAddressValid && address ? 'success' : ''}`}
+              className={`input-field font-mono text-xs ${addrError ? 'error' : isAddressValid && address.trim() ? 'success' : ''}`}
               id="home-wallet-address"
-              maxLength={network === 'TRC20' ? 34 : 42}
             />
             {addrError ? (
               <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
                 <AlertCircle className="w-3 h-3" /> {addrError}
               </p>
-            ) : isAddressValid && address ? (
+            ) : isAddressValid && address.trim() ? (
               <p className="text-xs text-emerald-400 mt-1 flex items-center gap-1">
                 <CheckCircle2 className="w-3 h-3" /> Valid {network === 'TRC20' ? 'TRC-20' : 'BEP-20'} address
               </p>
             ) : (
               <p className="text-[11px] text-white/40 mt-1">
                 {network === 'BEP20'
-                  ? 'BEP20 address must be 42 characters starting with 0x'
-                  : 'TRC20 address must be 34 characters starting with T'}
+                  ? 'Must be a valid 42-character address starting with 0x'
+                  : 'Must be a valid 34-character address starting with T'}
               </p>
             )}
           </div>
