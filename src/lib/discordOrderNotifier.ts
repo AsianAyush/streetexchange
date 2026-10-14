@@ -102,9 +102,19 @@ export function buildDiscordOrderPayload(orderData: DiscordOrderData | any) {
   const istTime = formatIST(orderData?.created_at || new Date().toISOString())
   const adminMentions = getDiscordAdminMentions(orderData?.admin_mentions)
 
+  const title = orderData?._overrideTitle || '🛒 New Order Received!'
+  const color = orderData?._overrideColor ?? 0x3B82F6
+  const statusDisplay = orderData?.status
+    ? orderData.status === 'COMPLETED'
+      ? '✅ COMPLETED'
+      : orderData.status === 'IN_PROGRESS'
+        ? '⚙️ IN PROGRESS (Awaiting Verification/Dispatch)'
+        : `⏳ ${orderData.status}`
+    : '⏳ PENDING'
+
   const embed = {
-    title: '🛒 New Order Received!',
-    color: 0x3B82F6,
+    title,
+    color,
     fields: [
       {
         name: 'Order ID',
@@ -118,7 +128,7 @@ export function buildDiscordOrderPayload(orderData: DiscordOrderData | any) {
       },
       {
         name: 'Status',
-        value: '⏳ PENDING',
+        value: statusDisplay,
         inline: true,
       },
       {
@@ -149,7 +159,7 @@ export function buildDiscordOrderPayload(orderData: DiscordOrderData | any) {
   }
 
   return {
-    content: `🚨 **New Order Received!** ${adminMentions}`,
+    content: `🚨 **${title}** ${adminMentions}`,
     embeds: [embed],
     allowed_mentions: {
       parse: ['users', 'roles', 'everyone'],

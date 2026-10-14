@@ -214,6 +214,9 @@ function QuickCalculator({ rates }: { rates: Rates | null }) {
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 text-sm font-semibold">₹</span>
               <input
                 type="number"
+                min={1000}
+                max={50000}
+                step="any"
                 value={inr}
                 onChange={(e) => handleInrChange(e.target.value)}
                 placeholder="1,000 – 50,000"

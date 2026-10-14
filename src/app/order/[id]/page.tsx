@@ -32,6 +32,7 @@ import {
   CreditCard,
   Zap,
   XCircle,
+  ShieldCheck,
 } from 'lucide-react'
 
 type Order = Tables<'orders'>
@@ -72,8 +73,16 @@ export default function OrderCheckoutPage() {
 
   // Payment method settings
   const [allowManualPayment, setAllowManualPayment] = useState<boolean | null>(null)
+  const [activeGateway, setActiveGateway] = useState<'BONDPAY' | 'WATCHPAYS'>('BONDPAY')
+  const [enableBothGateways, setEnableBothGateways] = useState(false)
 
-  // BondPay gateway state
+  // User-selected gateway (null = use system default)
+  const [selectedGateway, setSelectedGateway] = useState<'BONDPAY' | 'WATCHPAYS' | null>(null)
+
+  // Effective gateway used for the current session
+  const effectiveGateway: 'BONDPAY' | 'WATCHPAYS' = selectedGateway ?? activeGateway
+
+  // Payment gateway state
   const [bondPayLoading, setBondPayLoading] = useState(false)
   const [bondPayError, setBondPayError] = useState('')
 
@@ -145,6 +154,12 @@ export default function OrderCheckoutPage() {
           })
         }
 
+        // Freeze gateway selection if already chosen on order
+        if (orderData.payment_gateway === 'WATCHPAYS' || orderData.payment_gateway === 'BONDPAY') {
+          setActiveGateway(orderData.payment_gateway)
+          setSelectedGateway(orderData.payment_gateway)
+        }
+
         // Fetch payment settings from system_settings or fallback to /api/admin/settings
         try {
           const { data: paymentSettings, error: psErr } = await supabase
@@ -156,13 +171,22 @@ export default function OrderCheckoutPage() {
           if (!psErr && paymentSettings) {
             const rawVal = paymentSettings.value
             if (isMounted) setAllowManualPayment(rawVal === false || rawVal === 'false' ? false : true)
-          } else {
-            const res = await fetch('/api/admin/settings')
-            const data = await res.json()
-            if (isMounted && typeof data?.allow_manual_payment === 'boolean') {
+          }
+
+          // Always fetch the full settings bundle for gateway info
+          const res = await fetch('/api/admin/settings')
+          const data = await res.json()
+          if (isMounted) {
+            if (!psErr && !paymentSettings && typeof data?.allow_manual_payment === 'boolean') {
               setAllowManualPayment(data.allow_manual_payment)
-            } else if (isMounted) {
-              setAllowManualPayment(true)
+            }
+            if (data?.active_gateway && !orderData.payment_gateway) {
+              const gw = data.active_gateway === 'WATCHPAYS' ? 'WATCHPAYS' : 'BONDPAY'
+              setActiveGateway(gw)
+              setSelectedGateway(null)
+            }
+            if (typeof data?.enable_both_gateways === 'boolean') {
+              setEnableBothGateways(data.enable_both_gateways)
             }
           }
         } catch {
@@ -198,8 +222,8 @@ export default function OrderCheckoutPage() {
           if (updated.payment_gateway_ref) {
             setRefInput(updated.payment_gateway_ref)
           }
-          // Auto-redirect when BondPay webhook advances the order past PENDING
-          if (['PROCESSING', 'AWAITING_VERIFICATION', 'COMPLETED'].includes(updated.status ?? '')) {
+          // Auto-redirect when payment webhook advances the order past PENDING
+          if (['PROCESSING', 'AWAITING_VERIFICATION', 'IN_PROGRESS', 'COMPLETED'].includes(updated.status ?? '')) {
             router.push('/dashboard')
           }
         }
@@ -283,9 +307,64 @@ export default function OrderCheckoutPage() {
 
   const handleBondPayWithRetry = async () => {
     if (!order) return
-    retryAbortRef.current = false
-    setIsRetrying(true)
+
+    const gatewayToUse = selectedGateway || effectiveGateway
+
+    // 1. If payment link already exists for the selected gateway, redirect directly without calling backend API
+    if (order.payment_url && order.payment_gateway === gatewayToUse) {
+      window.location.href = order.payment_url
+      return
+    }
+
+    setBondPayLoading(true)
     setBondPayError('')
+
+    retryAbortRef.current = false
+
+    // Attempt the first payment creation
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
+
+      const res = await fetch('/api/payment/create', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ orderId: order.id, paymentGateway: gatewayToUse }),
+      })
+      const data = await res.json()
+      if (data?.gateway) {
+        setActiveGateway(data.gateway === 'WATCHPAYS' ? 'WATCHPAYS' : 'BONDPAY')
+        setSelectedGateway(data.gateway === 'WATCHPAYS' ? 'WATCHPAYS' : 'BONDPAY')
+      }
+      if (data?.payment_url) {
+        setOrder((prev) =>
+          prev
+            ? {
+                ...prev,
+                payment_url: data.payment_url,
+                payment_gateway: data.gateway || gatewayToUse,
+                gateway_order_no: data.gateway_order_no || prev.gateway_order_no,
+              }
+            : prev
+        )
+        window.location.href = data.payment_url
+        return
+      }
+
+      if (!res.ok && res.status !== 502) {
+        // Validation/auth/order status error — display directly
+        setBondPayError(data?.error || 'Failed to initiate payment. Please try again.')
+        setBondPayLoading(false)
+        return
+      }
+    } catch (err: any) {
+      console.warn('Initial payment attempt failed, falling back to retry loop:', err)
+    }
+
+    // Fallback to auto-retry loop if gateway is busy
+    setBondPayLoading(false)
+    setIsRetrying(true)
     setRetryTimeLeft(300)
     setRetryNextIn(0)
 
@@ -306,15 +385,31 @@ export default function OrderCheckoutPage() {
         const headers: Record<string, string> = { 'Content-Type': 'application/json' }
         if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
 
-        const res = await fetch('/api/payment/bondpay/create', {
+        const res = await fetch('/api/payment/create', {
           method: 'POST',
           headers,
-          body: JSON.stringify({ orderId: order.id }),
+          body: JSON.stringify({ orderId: order.id, paymentGateway: gatewayToUse }),
         })
         const data = await res.json()
-        if (data?.payment_url) return data.payment_url
+        if (data?.gateway) {
+          setActiveGateway(data.gateway === 'WATCHPAYS' ? 'WATCHPAYS' : 'BONDPAY')
+          setSelectedGateway(data.gateway === 'WATCHPAYS' ? 'WATCHPAYS' : 'BONDPAY')
+        }
+        if (data?.payment_url) {
+          setOrder((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  payment_url: data.payment_url,
+                  payment_gateway: data.gateway || gatewayToUse,
+                  gateway_order_no: data.gateway_order_no || prev.gateway_order_no,
+                }
+              : prev
+          )
+          return data.payment_url
+        }
       } catch (err) {
-        console.error('BondPay fetch error, retrying...', err)
+        console.error('Payment gateway fetch error, retrying...', err)
       }
       return null
     }
@@ -780,144 +875,247 @@ export default function OrderCheckoutPage() {
           /* ========================================================================= */
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-5 shadow-xl">
 
-            {/* ----------------------------------------------------------------- */}
-            {/* Case A: Manual payment is DISABLED — force BondPay                */}
-            {/* ----------------------------------------------------------------- */}
-            {allowManualPayment === false ? (
-              <>
-                <div className="flex items-start gap-3">
-                  <div className="p-3 bg-amber-500/10 text-amber-400 rounded-lg shrink-0">
-                    <Zap className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-semibold flex items-center gap-2">
-                      Instant UPI Payment via BondPay
-                      <span className="text-xs font-normal px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                        Automatic Gateway
-                      </span>
-                    </h2>
-                    <p className="text-sm text-slate-400 mt-1">
-                      Manual payments are currently disabled. Please pay automatically using BondPay / Instant UPI.
-                    </p>
-                  </div>
-                </div>
+                {/* ----------------------------------------------------------------- */}
+                {/* Case A: Manual payment is DISABLED — force automatic gateway      */}
+                {/* ----------------------------------------------------------------- */}
+                {allowManualPayment === false ? (
+                  <>
+                    <div className="flex items-start gap-3">
+                      <div className="p-3 bg-amber-500/10 text-amber-400 rounded-lg shrink-0">
+                        <Zap className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <h2 className="text-lg font-semibold flex items-center gap-2">
+                          Instant UPI Payment
+                          <span className="text-xs font-normal px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                            Auto Gateway
+                          </span>
+                        </h2>
+                        <p className="text-sm text-slate-400 mt-1">
+                          Manual payments are currently disabled. Please choose a payment gateway below.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* ====== ACTIVE PAYMENT SESSION BANNER ====== */}
+                    {order.payment_url && order.status === 'PENDING' && order.payment_gateway === effectiveGateway && (
+                      <div className="flex items-start gap-3 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 text-sm shadow-lg shadow-emerald-950/20">
+                        <Zap className="w-5 h-5 shrink-0 mt-0.5 text-emerald-400 animate-pulse" />
+                        <div className="flex-1">
+                          <p className="font-bold text-emerald-300">
+                            Active Payment Session — Redirecting to your original checkout link
+                          </p>
+                          <p className="text-xs text-emerald-200/80 mt-1">
+                            A secure checkout link is already active for this order with <strong>{order.payment_gateway || effectiveGateway}</strong>. Click below to proceed directly without generating a duplicate link.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ====== DUAL GATEWAY SELECTOR ====== */}
+                    {enableBothGateways && (
+                      <div className="space-y-3">
+                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Choose Payment Gateway</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {/* BondPay Card */}
+                          <button
+                            id="gateway-select-bondpay"
+                            type="button"
+                            onClick={() => {
+                              if (effectiveGateway !== 'BONDPAY') {
+                                setSelectedGateway('BONDPAY')
+                                setBondPayError('')
+                              }
+                            }}
+                            className={`relative flex items-start gap-3 p-4 rounded-xl border-2 text-left transition-all duration-200 ${
+                              effectiveGateway === 'BONDPAY'
+                                ? 'border-emerald-500/70 bg-emerald-500/10 shadow-lg shadow-emerald-500/10'
+                                : 'border-slate-700 bg-slate-800/50 hover:border-slate-600 hover:bg-slate-800'
+                            }`}
+                          >
+                            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shrink-0">
+                              <CreditCard className="w-5 h-5 text-white" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-white text-sm">⚡ BondPay</p>
+                              <p className="text-xs text-slate-400 mt-0.5">Instant UPI / QR Code</p>
+                            </div>
+                            {effectiveGateway === 'BONDPAY' && (
+                              <div className="absolute top-3 right-3 w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center">
+                                <Check className="w-3 h-3 text-white" />
+                              </div>
+                            )}
+                          </button>
+
+                          {/* WatchPays Card */}
+                          <button
+                            id="gateway-select-watchpays"
+                            type="button"
+                            onClick={() => {
+                              if (effectiveGateway !== 'WATCHPAYS') {
+                                setSelectedGateway('WATCHPAYS')
+                                setBondPayError('')
+                              }
+                            }}
+                            className={`relative flex items-start gap-3 p-4 rounded-xl border-2 text-left transition-all duration-200 ${
+                              effectiveGateway === 'WATCHPAYS'
+                                ? 'border-indigo-500/70 bg-indigo-500/10 shadow-lg shadow-indigo-500/10'
+                                : 'border-slate-700 bg-slate-800/50 hover:border-slate-600 hover:bg-slate-800'
+                            }`}
+                          >
+                            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shrink-0">
+                              <Zap className="w-5 h-5 text-white" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-white text-sm">💳 WatchPays</p>
+                              <p className="text-xs text-slate-400 mt-0.5">Fast UPI / Net Banking</p>
+                            </div>
+                            {effectiveGateway === 'WATCHPAYS' && (
+                              <div className="absolute top-3 right-3 w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center">
+                                <Check className="w-3 h-3 text-white" />
+                              </div>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                 {/* Notice banner */}
-                <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm">
-                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-amber-400" />
-                  <p>
-                    <strong>Manual payments are currently disabled.</strong> Please pay automatically
-                    using <strong>BondPay / Instant UPI</strong>. You will be redirected to a
-                    secure payment page to complete your order.
-                  </p>
-                </div>
-
-                {/* Order summary */}
-                <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 grid grid-cols-2 gap-3 text-xs">
-                  <div>
-                    <span className="text-slate-400 block mb-0.5">Amount to Pay</span>
-                    <span className="font-bold text-white text-base">₹{Number(order.inr_amount).toLocaleString('en-IN')}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block mb-0.5">Receiving USDT</span>
-                    <span className="font-bold text-violet-400 text-base">{Number(order.usdt_amount).toFixed(4)} USDT</span>
-                  </div>
-                  <div className="col-span-2 pt-2 border-t border-slate-800 flex items-center justify-between">
-                    <span className="text-slate-400">Destination ({order.network ?? 'TRC20'})</span>
-                    <span className="font-mono text-slate-300 truncate max-w-[200px]" title={order.wallet_address || ''}>
-                      {order.wallet_address}
-                    </span>
-                  </div>
-                </div>
-
-                {/* BondPay CTA */}
-                {bondPayError && !isRetrying && (
-                  <div className="flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
-                    <XCircle className="w-4 h-4 shrink-0" />
-                    {bondPayError}
-                  </div>
-                )}
-
-                {order.status === 'PENDING' ? (
-                  isRetrying ? (
-                    /* ---- Auto-retry UI card ---- */
-                    <div className="rounded-xl border border-amber-500/30 bg-gradient-to-br from-amber-950/40 to-slate-900 p-5 space-y-4 shadow-lg shadow-amber-900/20 animate-pulse-slow">
-                      {/* Header row */}
-                      <div className="flex items-center gap-3">
-                        <div className="shrink-0 w-10 h-10 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center">
-                          <RefreshCw className="w-5 h-5 text-amber-400 animate-spin" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-white leading-tight">
-                            Fetching payment gateway account…
-                          </p>
-                          <p className="text-xs text-amber-300/80 mt-0.5">
-                            {retryNextIn > 0
-                              ? `Retrying automatically in ${retryNextIn}s`
-                              : 'Connecting to BondPay…'}
-                          </p>
-                        </div>
-                        {/* MM:SS countdown badge */}
-                        <div className="shrink-0 flex flex-col items-center bg-slate-900 border border-amber-500/20 rounded-lg px-3 py-1.5">
-                          <span className="text-[10px] text-slate-500 uppercase tracking-widest">Time left</span>
-                          <span className="font-mono font-bold text-amber-400 text-lg leading-none tabular-nums">
-                            {formatCountdown(retryTimeLeft)}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Progress bar */}
-                      <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-gradient-to-r from-amber-500 to-orange-500 rounded-full transition-all duration-1000"
-                          style={{ width: `${(retryTimeLeft / 300) * 100}%` }}
-                        />
-                      </div>
-
-                      {/* Info note */}
-                      <p className="text-xs text-slate-400 leading-relaxed">
-                        The gateway may be temporarily busy assigning an account. We&apos;ll keep
-                        retrying every 8 seconds until a payment link is secured or the 5-minute
-                        window expires.
+                    <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm">
+                      <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-amber-400" />
+                      <p>
+                        <strong>Manual payments are currently disabled.</strong> Please pay automatically
+                        using <strong>{effectiveGateway === 'WATCHPAYS' ? 'WatchPays' : 'BondPay'} / Instant UPI</strong>. You will be redirected to a
+                        secure payment page to complete your order.
                       </p>
-
-                      {/* Cancel button */}
-                      <button
-                        id="bondpay-retry-cancel-btn"
-                        type="button"
-                        onClick={cancelRetry}
-                        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-slate-600 text-slate-300 hover:text-white hover:border-slate-400 text-sm font-medium transition-colors"
-                      >
-                        <XCircle className="w-4 h-4" />
-                        Cancel — Use Manual UPI Instead
-                      </button>
                     </div>
-                  ) : (
-                  <button
-                    id="bondpay-checkout-btn"
-                    type="button"
-                    disabled={bondPayLoading}
-                    onClick={handleBondPayWithRetry}
-                    className="w-full flex items-center justify-center gap-2.5 py-3.5 rounded-xl font-bold text-base bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-amber-500/20 cursor-pointer"
-                  >
-                    <Zap className="w-5 h-5" />
-                    Pay with BondPay (₹{Number(order.inr_amount).toLocaleString('en-IN')}) →
-                  </button>
-                  )
-                ) : (
-                  <div className="p-4 bg-slate-800 rounded-xl text-center animate-antigravity space-y-1 border border-slate-700">
-                    <p className="text-amber-400 font-semibold">⏳ Order Status: {order.status}</p>
-                    <p className="text-xs text-slate-400">
-                      Payment submitted and under verification. Re-payment is disabled.
-                    </p>
-                  </div>
-                )}
 
-                <p className="text-center text-xs text-slate-500">
-                  <p>Don&apos;t close or refresh this page until payment is verified.</p>
-                </p>
-              </>
-            ) : (
+                    {/* Order summary */}
+                    <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 grid grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <span className="text-slate-400 block mb-0.5">Amount to Pay</span>
+                        <span className="font-bold text-white text-base">₹{Number(order.inr_amount).toLocaleString('en-IN')}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block mb-0.5">Receiving USDT</span>
+                        <span className="font-bold text-violet-400 text-base">{Number(order.usdt_amount).toFixed(4)} USDT</span>
+                      </div>
+                      <div className="col-span-2 pt-2 border-t border-slate-800 flex items-center justify-between">
+                        <span className="text-slate-400">Destination ({order.network ?? 'TRC20'})</span>
+                        <span className="font-mono text-slate-300 truncate max-w-[200px]" title={order.wallet_address || ''}>
+                          {order.wallet_address}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Gateway CTA error */}
+                    {bondPayError && !isRetrying && (
+                      <div className="flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+                        <XCircle className="w-4 h-4 shrink-0" />
+                        {bondPayError}
+                      </div>
+                    )}
+
+                    {order.status === 'PENDING' ? (
+                      isRetrying ? (
+                        /* ---- Auto-retry UI card ---- */
+                        <div className="rounded-xl border border-amber-500/30 bg-gradient-to-br from-amber-950/40 to-slate-900 p-5 space-y-4 shadow-lg shadow-amber-900/20 animate-pulse-slow">
+                          {/* Header row */}
+                          <div className="flex items-center gap-3">
+                            <div className="shrink-0 w-10 h-10 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center">
+                              <RefreshCw className="w-5 h-5 text-amber-400 animate-spin" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-semibold text-white leading-tight">
+                                Fetching payment gateway account…
+                              </p>
+                              <p className="text-xs text-amber-300/80 mt-0.5">
+                                {retryNextIn > 0
+                                  ? `Retrying automatically in ${retryNextIn}s`
+                                  : `Connecting to ${effectiveGateway === 'WATCHPAYS' ? 'WatchPays' : 'BondPay'}…`}
+                              </p>
+                            </div>
+                            {/* MM:SS countdown badge */}
+                            <div className="shrink-0 flex flex-col items-center bg-slate-900 border border-amber-500/20 rounded-lg px-3 py-1.5">
+                              <span className="text-[10px] text-slate-500 uppercase tracking-widest">Time left</span>
+                              <span className="font-mono font-bold text-amber-400 text-lg leading-none tabular-nums">
+                                {formatCountdown(retryTimeLeft)}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Progress bar */}
+                          <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-gradient-to-r from-amber-500 to-orange-500 rounded-full transition-all duration-1000"
+                              style={{ width: `${(retryTimeLeft / 300) * 100}%` }}
+                            />
+                          </div>
+
+                          {/* Info note */}
+                          <p className="text-xs text-slate-400 leading-relaxed">
+                            The gateway may be temporarily busy assigning an account. We&apos;ll keep
+                            retrying every 8 seconds until a payment link is secured or the 5-minute
+                            window expires.
+                          </p>
+
+                          {/* Cancel button */}
+                          <button
+                            id="bondpay-retry-cancel-btn"
+                            type="button"
+                            onClick={cancelRetry}
+                            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-slate-600 text-slate-300 hover:text-white hover:border-slate-400 text-sm font-medium transition-colors"
+                          >
+                            <XCircle className="w-4 h-4" />
+                            Cancel — Use Manual UPI Instead
+                          </button>
+                        </div>
+                      ) : (
+                      <button
+                        id="gateway-checkout-btn"
+                        type="button"
+                        disabled={bondPayLoading}
+                        onClick={handleBondPayWithRetry}
+                        className={`w-full flex items-center justify-center gap-2.5 py-3.5 rounded-xl font-bold text-base text-white hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-lg cursor-pointer ${
+                          effectiveGateway === 'WATCHPAYS'
+                            ? 'bg-gradient-to-r from-indigo-600 to-violet-600 shadow-indigo-500/20'
+                            : 'bg-gradient-to-r from-amber-500 to-orange-500 shadow-amber-500/20'
+                        }`}
+                      >
+                        {bondPayLoading ? (
+                          <>
+                            <Loader2 className="w-5 h-5 animate-spin" />
+                            Opening payment page...
+                          </>
+                        ) : order.payment_url ? (
+                          <>
+                            <ExternalLink className="w-5 h-5" />
+                            Complete Payment (₹{Number(order.inr_amount).toLocaleString('en-IN')}) →
+                          </>
+                        ) : (
+                          <>
+                            {effectiveGateway === 'WATCHPAYS'
+                              ? <Zap className="w-5 h-5" />
+                              : <CreditCard className="w-5 h-5" />}
+                            Pay with {effectiveGateway === 'WATCHPAYS' ? 'WatchPays' : 'BondPay'} (₹{Number(order.inr_amount).toLocaleString('en-IN')}) →
+                          </>
+                        )}
+                      </button>
+                      )
+                    ) : (
+                      <div className="p-4 bg-slate-800 rounded-xl text-center animate-antigravity space-y-1 border border-slate-700">
+                        <p className="text-amber-400 font-semibold">⏳ Order Status: {order.status}</p>
+                        <p className="text-xs text-slate-400">
+                          Payment submitted and under verification. Re-payment is disabled.
+                        </p>
+                      </div>
+                    )}
+
+                    <p className="text-center text-xs text-slate-500">
+                      <p>Don&apos;t close or refresh this page until payment is verified.</p>
+                    </p>
+                  </>
+                ) : (
               /* ----------------------------------------------------------------- */
               /* Case B: Manual payment is ENABLED — show existing UPI flow        */
               /* ----------------------------------------------------------------- */

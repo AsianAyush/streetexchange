@@ -41,6 +41,8 @@ import {
   ArrowUpRight,
   Wallet,
   CreditCard,
+  Zap,
+  ExternalLink,
 } from 'lucide-react'
 
 type Order = Tables<'orders'>
@@ -609,7 +611,7 @@ export default function DashboardPage() {
                       type="number"
                       min={1000}
                       max={50000}
-                      step={100}
+                      step="any"
                       value={inrAmount}
                       onChange={(e) => handleInrChange(e.target.value)}
                       placeholder="Enter amount"
@@ -869,7 +871,12 @@ export default function DashboardPage() {
                             <span className="text-xs text-white/20 font-mono">{order.id.slice(0, 8)}…</span>
 
                             {/* State indicators for Buy vs Sell */}
-                            {!isSell && !order.assigned_upi_id && order.status === 'PENDING' && (
+                            {!isSell && order.payment_url && order.status === 'PENDING' && (
+                              <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 font-semibold">
+                                <Zap className="w-2.5 h-2.5 text-emerald-400" /> Active Payment Session
+                              </span>
+                            )}
+                            {!isSell && !order.payment_url && !order.assigned_upi_id && order.status === 'PENDING' && (
                               <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1">
                                 <Clock className="w-2.5 h-2.5 animate-pulse" /> Awaiting Payment Details
                               </span>
@@ -943,9 +950,24 @@ export default function DashboardPage() {
                             <span className="text-white/30 text-[11px]">Checkout unavailable</span>
                           </div>
                         ) : (
-                          <div className="pt-1 flex items-center justify-between text-xs text-violet-400 group-hover:text-violet-300">
-                            <span>
-                              {isCompleted ? 'View Order Details →' : isSell ? 'Deposit USDT & View Details →' : 'View Order Checkout & Payment →'}
+                          <div className={`pt-1 flex items-center justify-between text-xs font-semibold ${
+                            order.payment_url && order.status === 'PENDING'
+                              ? 'text-emerald-400 group-hover:text-emerald-300'
+                              : 'text-violet-400 group-hover:text-violet-300'
+                          }`}>
+                            <span className="flex items-center gap-1.5">
+                              {isCompleted ? (
+                                'View Order Details →'
+                              ) : isSell ? (
+                                'Deposit USDT & View Details →'
+                              ) : order.payment_url && order.status === 'PENDING' ? (
+                                <>
+                                  <ExternalLink className="w-3.5 h-3.5" />
+                                  Active Payment Session — Complete Payment →
+                                </>
+                              ) : (
+                                'View Order Checkout & Payment →'
+                              )}
                             </span>
                             <ChevronRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
                           </div>

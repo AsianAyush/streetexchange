@@ -18,7 +18,7 @@ import { createBondPayOrder } from '@/lib/bondpay'
 
 function createServiceClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY!
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   return createSupabaseClient<Database>(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   })
@@ -84,14 +84,41 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   console.log(`[bondpay/create] Processing order ${orderId} for user ${user.id}`)
 
   // 3. Fetch order — verify it exists and belongs to the authenticated user
-  const { data: order, error: orderErr } = await serviceClient
-    .from('orders')
-    .select('id, inr_amount, user_id, status, merchant_order_no, payment_url')
-    .eq('id', orderId)
-    .maybeSingle()
+  let order: any = null
+  let orderErr: any = null
+
+  try {
+    const res = await serviceClient
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .single()
+    order = res.data
+    orderErr = res.error
+  } catch (err: any) {
+    orderErr = err
+  }
+
+  // Fallback: if select('*') or single() errored, retry with explicit safe columns
+  if (orderErr && !order) {
+    console.warn('[bondpay/create] Retrying order fetch with safe column select:', orderErr?.message || orderErr)
+    try {
+      const fallbackRes = await serviceClient
+        .from('orders')
+        .select('id, inr_amount, user_id, status, merchant_order_no, payment_url, gateway_order_no')
+        .eq('id', orderId)
+        .maybeSingle()
+      if (fallbackRes.data && !fallbackRes.error) {
+        order = fallbackRes.data
+        orderErr = null
+      }
+    } catch (fallbackErr: any) {
+      console.error('[bondpay/create] Fallback query error:', fallbackErr)
+    }
+  }
 
   if (orderErr || !order) {
-    console.error(`[bondpay/create] Order fetch error for ${orderId}:`, orderErr?.message)
+    console.error(`[bondpay/create] Order fetch error for ${orderId}:`, orderErr?.message || orderErr)
     return NextResponse.json({ error: 'Order not found.' }, { status: 404 })
   }
 
@@ -100,24 +127,37 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 
-  if (order.status === 'COMPLETED' || order.status === 'CANCELLED') {
+  if (order.status !== 'PENDING') {
     return NextResponse.json(
       { error: `Order is already ${order.status}. Cannot initiate payment.` },
       { status: 409 },
     )
   }
 
-  // 4. If a payment_url already exists for this order, return it immediately
+  // 4. If a payment_url already exists for this order and status is strictly PENDING, return it immediately
   //    (idempotency — avoids creating duplicate BondPay sessions on re-clicks)
-  if (order.payment_url && order.merchant_order_no) {
+  if (order.payment_url && order.status === 'PENDING') {
     console.log(`[bondpay/create] Reusing existing payment_url for order ${orderId}: ${order.payment_url}`)
-    return NextResponse.json({ success: true, payment_url: order.payment_url })
+    return NextResponse.json({
+      success: true,
+      payment_url: order.payment_url,
+      gateway_order_no: (order as any).gateway_order_no ?? null,
+      gateway: 'BONDPAY',
+      cached: true,
+    })
   }
 
-  // 5. Generate a unique merchant_order_no
-  const timestamp = Date.now()
-  const random = Math.random().toString(36).slice(2, 8).toUpperCase()
-  const merchantOrderNo = `ORDER_${timestamp}_${random}`
+  // 5. Deterministic merchant_order_no — reuse if already assigned to this order
+  let merchantOrderNo = order.merchant_order_no
+  if (!merchantOrderNo) {
+    const timestamp = Date.now()
+    const random = Math.random().toString(36).slice(2, 8).toUpperCase()
+    merchantOrderNo = `ORDER_${timestamp}_${random}`
+
+    await serviceClient.from('orders').update({
+      merchant_order_no: merchantOrderNo,
+    }).eq('id', orderId)
+  }
 
   console.log(`[bondpay/create] Calling BondPay for amount ₹${order.inr_amount} (merchantOrderNo: ${merchantOrderNo})`)
 
@@ -143,15 +183,25 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   // 7. Persist the gateway fields on the order record using serviceClient
-  const { error: updateErr } = await serviceClient
-    .from('orders')
-    .update({
-      merchant_order_no: merchantOrderNo,
-      gateway_order_no: bondPayResult.order_no ?? null,
-      payment_url: bondPayResult.payment_url,
-      updated_at: new Date().toISOString(),
-    })
+  const updatePayload: Record<string, any> = {
+    merchant_order_no: merchantOrderNo,
+    gateway_order_no: bondPayResult.order_no ?? null,
+    payment_url: bondPayResult.payment_url,
+    payment_gateway: 'BONDPAY',
+    updated_at: new Date().toISOString(),
+  }
+
+  let { error: updateErr } = await (serviceClient
+    .from('orders') as any)
+    .update(updatePayload)
     .eq('id', orderId)
+
+  if (updateErr && updatePayload.payment_gateway) {
+    console.warn('[bondpay/create] Retrying update without payment_gateway:', updateErr.message)
+    delete updatePayload.payment_gateway
+    const retryRes = await (serviceClient.from('orders') as any).update(updatePayload).eq('id', orderId)
+    updateErr = retryRes.error
+  }
 
   if (updateErr) {
     console.error('[bondpay/create] Failed to persist gateway fields:', updateErr.message)
@@ -159,5 +209,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     console.log(`[bondpay/create] Successfully saved gateway details to order ${orderId}`)
   }
 
-  return NextResponse.json({ success: true, payment_url: bondPayResult.payment_url })
+  return NextResponse.json({
+    success: true,
+    payment_url: bondPayResult.payment_url,
+    gateway_order_no: bondPayResult.order_no ?? null,
+    gateway: 'BONDPAY',
+  })
 }

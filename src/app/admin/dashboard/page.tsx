@@ -39,6 +39,7 @@ import {
   ToggleRight,
   CreditCard,
   Zap,
+  Radio,
 } from 'lucide-react'
 
 type Order = Tables<'orders'> & { profiles?: { username: string; email: string } }
@@ -136,10 +137,18 @@ export default function AdminDashboardPage() {
 
   // Payment Gateway Settings state
   const [allowManualPayment, setAllowManualPayment] = useState<boolean>(true)
+  const [activeGateway, setActiveGateway] = useState<'BONDPAY' | 'WATCHPAYS'>('BONDPAY')
+  const [enableBothGateways, setEnableBothGateways] = useState(false)
   const [paymentSettingLoading, setPaymentSettingLoading] = useState(false)
   const [paymentSettingUpdating, setPaymentSettingUpdating] = useState(false)
   const [paymentSettingSuccess, setPaymentSettingSuccess] = useState(false)
   const [paymentSettingError, setPaymentSettingError] = useState('')
+  const [gatewaySwitching, setGatewaySwitching] = useState(false)
+  const [gatewaySwitchSuccess, setGatewaySwitchSuccess] = useState(false)
+  const [gatewaySwitchError, setGatewaySwitchError] = useState('')
+  const [bothGatewayUpdating, setBothGatewayUpdating] = useState(false)
+  const [bothGatewaySuccess, setBothGatewaySuccess] = useState(false)
+  const [bothGatewayError, setBothGatewayError] = useState('')
 
   // fetchOrders — defined before any useEffect that references it (const is NOT hoisted)
   const fetchOrders = useCallback(async () => {
@@ -233,6 +242,12 @@ export default function AdminDashboardPage() {
         .then((data) => {
           if (isMounted && typeof data.allow_manual_payment === 'boolean') {
             setAllowManualPayment(data.allow_manual_payment)
+          }
+          if (isMounted && data.active_gateway) {
+            setActiveGateway(data.active_gateway === 'WATCHPAYS' ? 'WATCHPAYS' : 'BONDPAY')
+          }
+          if (isMounted && typeof data.enable_both_gateways === 'boolean') {
+            setEnableBothGateways(data.enable_both_gateways)
           }
         })
         .catch((err) => {
@@ -444,6 +459,63 @@ export default function AdminDashboardPage() {
       setPaymentSettingError(err?.message || 'Failed to update payment setting.')
     } finally {
       setPaymentSettingUpdating(false)
+    }
+  }
+
+  const handleSwitchGateway = async (gateway: 'BONDPAY' | 'WATCHPAYS') => {
+    if (gateway === activeGateway) return
+    setGatewaySwitching(true)
+    setGatewaySwitchError('')
+    setGatewaySwitchSuccess(false)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (session?.access_token) {
+        headers['Authorization'] = `Bearer ${session.access_token}`
+      }
+
+      const res = await fetch('/api/admin/settings', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ active_gateway: gateway }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to switch gateway')
+      setActiveGateway(gateway)
+      setGatewaySwitchSuccess(true)
+      setTimeout(() => setGatewaySwitchSuccess(false), 3000)
+    } catch (err: any) {
+      setGatewaySwitchError(err?.message || 'Failed to switch gateway.')
+    } finally {
+      setGatewaySwitching(false)
+    }
+  }
+
+  const handleToggleBothGateways = async () => {
+    const newValue = !enableBothGateways
+    setBothGatewayUpdating(true)
+    setBothGatewayError('')
+    setBothGatewaySuccess(false)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (session?.access_token) {
+        headers['Authorization'] = `Bearer ${session.access_token}`
+      }
+      const res = await fetch('/api/admin/settings', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ enable_both_gateways: newValue }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to update setting')
+      setEnableBothGateways(newValue)
+      setBothGatewaySuccess(true)
+      setTimeout(() => setBothGatewaySuccess(false), 3000)
+    } catch (err: any) {
+      setBothGatewayError(err?.message || 'Failed to update setting.')
+    } finally {
+      setBothGatewayUpdating(false)
     }
   }
 
@@ -800,6 +872,191 @@ export default function AdminDashboardPage() {
               </div>
             )}
           </div>
+
+          {/* Gateway Switcher Section */}
+          <div className="border-t border-white/5 pt-5 mt-2 space-y-4">
+            <div className="flex items-center gap-2">
+              <Radio className="w-4 h-4 text-cyan-400" />
+              <p className="text-sm font-semibold text-white">
+                Active Payment Gateway
+              </p>
+              <span className="text-xs text-white/30 ml-auto">
+                All new payments will be routed through the selected gateway
+              </span>
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-3">
+              {/* BondPay Option */}
+              <button
+                id="admin-gateway-bondpay"
+                type="button"
+                onClick={() => handleSwitchGateway('BONDPAY')}
+                disabled={gatewaySwitching}
+                className={`relative p-4 rounded-xl border-2 text-left transition-all duration-300 ${
+                  activeGateway === 'BONDPAY'
+                    ? 'border-emerald-500/60 bg-emerald-500/10 shadow-lg shadow-emerald-500/5'
+                    : 'border-white/10 bg-white/2 hover:border-white/20 hover:bg-white/5'
+                } disabled:opacity-50`}
+              >
+                {activeGateway === 'BONDPAY' && (
+                  <div className="absolute top-3 right-3">
+                    <div className="w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center">
+                      <Check className="w-3 h-3 text-white" />
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center">
+                    <CreditCard className="w-4.5 h-4.5 text-white" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-white text-sm">BondPay</p>
+                    <p className="text-[11px] text-white/40">Primary Gateway</p>
+                  </div>
+                </div>
+                <p className="text-[11px] text-white/30">
+                  Original payment processor. All existing payment flows routed through BondPay.
+                </p>
+              </button>
+
+              {/* WatchPays Option */}
+              <button
+                id="admin-gateway-watchpays"
+                type="button"
+                onClick={() => handleSwitchGateway('WATCHPAYS')}
+                disabled={gatewaySwitching}
+                className={`relative p-4 rounded-xl border-2 text-left transition-all duration-300 ${
+                  activeGateway === 'WATCHPAYS'
+                    ? 'border-indigo-500/60 bg-indigo-500/10 shadow-lg shadow-indigo-500/5'
+                    : 'border-white/10 bg-white/2 hover:border-white/20 hover:bg-white/5'
+                } disabled:opacity-50`}
+              >
+                {activeGateway === 'WATCHPAYS' && (
+                  <div className="absolute top-3 right-3">
+                    <div className="w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center">
+                      <Check className="w-3 h-3 text-white" />
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center gap-3 mb-2">
+                  <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center">
+                    <Zap className="w-4.5 h-4.5 text-white" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-white text-sm">WatchPays</p>
+                    <p className="text-[11px] text-white/40">Secondary Gateway</p>
+                  </div>
+                </div>
+                <p className="text-[11px] text-white/30">
+                  Alternative payment processor with MD5 signature verification.
+                </p>
+              </button>
+            </div>
+
+            {/* Gateway Switch Status / Feedback */}
+            <div className="flex items-center gap-3">
+              <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                activeGateway === 'WATCHPAYS'
+                  ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400'
+                  : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+              }`}>
+                {activeGateway === 'WATCHPAYS'
+                  ? <><Zap className="w-3.5 h-3.5" /> Active: WatchPays</>
+                  : <><CreditCard className="w-3.5 h-3.5" /> Active: BondPay</>}
+              </div>
+              {gatewaySwitching && (
+                <div className="w-4 h-4 border-2 border-white/20 border-t-white/70 rounded-full animate-spin" />
+              )}
+              {gatewaySwitchSuccess && (
+                <div className="flex items-center gap-1.5 text-sm text-emerald-400 animate-fade-in-up">
+                  <Check className="w-4 h-4" />
+                  Gateway switched! All new payments now route through {activeGateway === 'WATCHPAYS' ? 'WatchPays' : 'BondPay'}.
+                </div>
+              )}
+              {gatewaySwitchError && (
+                <div className="flex items-center gap-1.5 text-sm text-red-400">
+                  <AlertCircle className="w-3.5 h-3.5" /> {gatewaySwitchError}
+                </div>
+              )}
+            </div>
+
+            {/* ====== Enable Both Gateways Toggle ====== */}
+            <div className="border-t border-white/5 pt-5 mt-2 space-y-3">
+              <div className="flex items-center gap-2">
+                <Zap className="w-4 h-4 text-violet-400" />
+                <p className="text-sm font-semibold text-white">Enable Both Gateways</p>
+                <span className="text-xs text-white/30 ml-auto">
+                  Let users pick their gateway at checkout
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between bg-white/3 rounded-xl p-4 border border-white/5">
+                <div className="flex items-center gap-3">
+                  <div className={`p-2.5 rounded-lg ${
+                    enableBothGateways ? 'bg-violet-500/15' : 'bg-white/5'
+                  }`}>
+                    <Radio className={`w-5 h-5 ${enableBothGateways ? 'text-violet-400' : 'text-white/30'}`} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-white">
+                      {enableBothGateways ? 'Both Gateways Shown' : 'Single Gateway Mode'}
+                    </p>
+                    <p className="text-xs text-white/40 mt-0.5">
+                      {enableBothGateways
+                        ? 'Users see a gateway selector (BondPay + WatchPays) on checkout'
+                        : 'Users only see the active default gateway on checkout'}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  id="admin-both-gateways-toggle"
+                  type="button"
+                  onClick={handleToggleBothGateways}
+                  disabled={bothGatewayUpdating}
+                  aria-pressed={enableBothGateways}
+                  aria-label="Toggle both gateways"
+                  className={`relative inline-flex h-7 w-14 shrink-0 items-center rounded-full transition-colors duration-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-black disabled:opacity-50 ${
+                    enableBothGateways
+                      ? 'bg-violet-500 focus-visible:ring-violet-500'
+                      : 'bg-white/15 focus-visible:ring-violet-500'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform duration-300 ${
+                      enableBothGateways ? 'translate-x-8' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+                  enableBothGateways
+                    ? 'bg-violet-500/10 border-violet-500/20 text-violet-400'
+                    : 'bg-white/5 border-white/10 text-white/40'
+                }`}>
+                  {enableBothGateways
+                    ? <><ToggleRight className="w-3.5 h-3.5" /> Dual Gateway: ON</>  
+                    : <><ToggleLeft className="w-3.5 h-3.5" /> Dual Gateway: OFF</>}
+                </div>
+                {bothGatewayUpdating && (
+                  <div className="w-4 h-4 border-2 border-white/20 border-t-white/70 rounded-full animate-spin" />
+                )}
+                {bothGatewaySuccess && (
+                  <div className="flex items-center gap-1.5 text-sm text-emerald-400 animate-fade-in-up">
+                    <Check className="w-4 h-4" />
+                    {enableBothGateways ? 'Dual gateway enabled!' : 'Single gateway mode active.'}
+                  </div>
+                )}
+                {bothGatewayError && (
+                  <div className="flex items-center gap-1.5 text-sm text-red-400">
+                    <AlertCircle className="w-3.5 h-3.5" /> {bothGatewayError}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Order Management Panel */}
@@ -886,6 +1143,16 @@ export default function AdminDashboardPage() {
                             {order.network === 'BEP20' ? <Bep20Logo className="w-3 h-3 text-amber-400" /> : <Trc20Logo className="w-3 h-3 text-red-400" />}
                             {order.network ?? 'TRC20'}
                           </span>
+
+                          {order.payment_gateway && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold border ${
+                              order.payment_gateway === 'WATCHPAYS'
+                                ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
+                                : 'bg-teal-500/20 text-teal-300 border-teal-500/30'
+                            }`}>
+                              {order.payment_gateway}
+                            </span>
+                          )}
 
                           <span className="text-xs text-white/20 font-mono">{order.id.slice(0, 12)}…</span>
                           <CopyButton text={order.id} label="ID" />

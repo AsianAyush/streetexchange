@@ -188,6 +188,7 @@ export function CreateOrderForm({ liveRate }: { liveRate: number }) {
           type="number"
           min={1000}
           max={50000}
+          step="any"
           value={inrAmount}
           onChange={(e) => setInrAmount(Number(e.target.value))}
           className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-white focus:outline-none focus:border-blue-500"

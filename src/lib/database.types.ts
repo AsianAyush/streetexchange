@@ -20,6 +20,7 @@ export type Database = {
           merchant_order_no: string | null
           network: Database["public"]["Enums"]["network_type_enum"]
           order_type: Database["public"]["Enums"]["order_type_enum"]
+          payment_gateway: string | null
           payment_gateway_ref: string | null
           payment_url: string | null
           rate_applied: number
@@ -40,6 +41,7 @@ export type Database = {
           merchant_order_no?: string | null
           network?: Database["public"]["Enums"]["network_type_enum"]
           order_type?: Database["public"]["Enums"]["order_type_enum"]
+          payment_gateway?: string | null
           payment_gateway_ref?: string | null
           payment_url?: string | null
           rate_applied: number
@@ -60,6 +62,7 @@ export type Database = {
           merchant_order_no?: string | null
           network?: Database["public"]["Enums"]["network_type_enum"]
           order_type?: Database["public"]["Enums"]["order_type_enum"]
+          payment_gateway?: string | null
           payment_gateway_ref?: string | null
           payment_url?: string | null
           rate_applied?: number
