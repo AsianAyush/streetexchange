@@ -386,6 +386,9 @@ export default function DashboardPage() {
         rate_applied: activeRate,
         network: network,
         status: 'PENDING',
+        payment_gateway: null,
+        payment_url: null,
+        gateway_order_no: null,
       }
 
       if (orderType === 'BUY') {

@@ -105,7 +105,10 @@ export function CreateOrderForm({ liveRate }: { liveRate: number }) {
             rate_applied: liveRate,
             network: network,
             wallet_address: walletAddress.trim(),
-            status: 'PENDING'
+            status: 'PENDING',
+            payment_gateway: null,
+            payment_url: null,
+            gateway_order_no: null,
           }
         ])
         .select()

@@ -137,7 +137,7 @@ export default function AdminDashboardPage() {
 
   // Payment Gateway Settings state
   const [allowManualPayment, setAllowManualPayment] = useState<boolean>(true)
-  const [activeGateway, setActiveGateway] = useState<'BONDPAY' | 'WATCHPAYS'>('BONDPAY')
+  const [activeGateway, setActiveGateway] = useState<'BONDPAY' | 'BLADEPAY'>('BONDPAY')
   const [enableBothGateways, setEnableBothGateways] = useState(false)
   const [paymentSettingLoading, setPaymentSettingLoading] = useState(false)
   const [paymentSettingUpdating, setPaymentSettingUpdating] = useState(false)
@@ -244,7 +244,7 @@ export default function AdminDashboardPage() {
             setAllowManualPayment(data.allow_manual_payment)
           }
           if (isMounted && data.active_gateway) {
-            setActiveGateway(data.active_gateway === 'WATCHPAYS' ? 'WATCHPAYS' : 'BONDPAY')
+            setActiveGateway(data.active_gateway === 'BLADEPAY' ? 'BLADEPAY' : 'BONDPAY')
           }
           if (isMounted && typeof data.enable_both_gateways === 'boolean') {
             setEnableBothGateways(data.enable_both_gateways)
@@ -462,7 +462,7 @@ export default function AdminDashboardPage() {
     }
   }
 
-  const handleSwitchGateway = async (gateway: 'BONDPAY' | 'WATCHPAYS') => {
+  const handleSwitchGateway = async (gateway: 'BONDPAY' | 'BLADEPAY') => {
     if (gateway === activeGateway) return
     setGatewaySwitching(true)
     setGatewaySwitchError('')
@@ -919,36 +919,36 @@ export default function AdminDashboardPage() {
                 </p>
               </button>
 
-              {/* WatchPays Option */}
+              {/* BladePay Option */}
               <button
-                id="admin-gateway-watchpays"
+                id="admin-gateway-bladepay"
                 type="button"
-                onClick={() => handleSwitchGateway('WATCHPAYS')}
+                onClick={() => handleSwitchGateway('BLADEPAY')}
                 disabled={gatewaySwitching}
                 className={`relative p-4 rounded-xl border-2 text-left transition-all duration-300 ${
-                  activeGateway === 'WATCHPAYS'
-                    ? 'border-indigo-500/60 bg-indigo-500/10 shadow-lg shadow-indigo-500/5'
+                  activeGateway === 'BLADEPAY'
+                    ? 'border-violet-500/60 bg-violet-500/10 shadow-lg shadow-violet-500/5'
                     : 'border-white/10 bg-white/2 hover:border-white/20 hover:bg-white/5'
                 } disabled:opacity-50`}
               >
-                {activeGateway === 'WATCHPAYS' && (
+                {activeGateway === 'BLADEPAY' && (
                   <div className="absolute top-3 right-3">
-                    <div className="w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center">
+                    <div className="w-5 h-5 rounded-full bg-violet-500 flex items-center justify-center">
                       <Check className="w-3 h-3 text-white" />
                     </div>
                   </div>
                 )}
                 <div className="flex items-center gap-3 mb-2">
-                  <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center">
+                  <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center">
                     <Zap className="w-4.5 h-4.5 text-white" />
                   </div>
                   <div>
-                    <p className="font-bold text-white text-sm">WatchPays</p>
+                    <p className="font-bold text-white text-sm">BladePay</p>
                     <p className="text-[11px] text-white/40">Secondary Gateway</p>
                   </div>
                 </div>
                 <p className="text-[11px] text-white/30">
-                  Alternative payment processor with MD5 signature verification.
+                  Modern payment aggregator with cashier links and MD5 webhook verification.
                 </p>
               </button>
             </div>
@@ -956,12 +956,12 @@ export default function AdminDashboardPage() {
             {/* Gateway Switch Status / Feedback */}
             <div className="flex items-center gap-3">
               <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold border ${
-                activeGateway === 'WATCHPAYS'
-                  ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400'
+                activeGateway === 'BLADEPAY'
+                  ? 'bg-violet-500/10 border-violet-500/20 text-violet-400'
                   : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
               }`}>
-                {activeGateway === 'WATCHPAYS'
-                  ? <><Zap className="w-3.5 h-3.5" /> Active: WatchPays</>
+                {activeGateway === 'BLADEPAY'
+                  ? <><Zap className="w-3.5 h-3.5" /> Active: BladePay</>
                   : <><CreditCard className="w-3.5 h-3.5" /> Active: BondPay</>}
               </div>
               {gatewaySwitching && (
@@ -970,7 +970,7 @@ export default function AdminDashboardPage() {
               {gatewaySwitchSuccess && (
                 <div className="flex items-center gap-1.5 text-sm text-emerald-400 animate-fade-in-up">
                   <Check className="w-4 h-4" />
-                  Gateway switched! All new payments now route through {activeGateway === 'WATCHPAYS' ? 'WatchPays' : 'BondPay'}.
+                  Gateway switched! All new payments now route through {activeGateway === 'BLADEPAY' ? 'BladePay' : 'BondPay'}.
                 </div>
               )}
               {gatewaySwitchError && (
@@ -1003,7 +1003,7 @@ export default function AdminDashboardPage() {
                     </p>
                     <p className="text-xs text-white/40 mt-0.5">
                       {enableBothGateways
-                        ? 'Users see a gateway selector (BondPay + WatchPays) on checkout'
+                        ? 'Users see a gateway selector (BondPay + BladePay) on checkout'
                         : 'Users only see the active default gateway on checkout'}
                     </p>
                   </div>
@@ -1146,8 +1146,8 @@ export default function AdminDashboardPage() {
 
                           {order.payment_gateway && (
                             <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold border ${
-                              order.payment_gateway === 'WATCHPAYS'
-                                ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
+                              order.payment_gateway === 'BLADEPAY'
+                                ? 'bg-violet-500/20 text-violet-300 border-violet-500/30'
                                 : 'bg-teal-500/20 text-teal-300 border-teal-500/30'
                             }`}>
                               {order.payment_gateway}

@@ -73,14 +73,27 @@ export default function OrderCheckoutPage() {
 
   // Payment method settings
   const [allowManualPayment, setAllowManualPayment] = useState<boolean | null>(null)
-  const [activeGateway, setActiveGateway] = useState<'BONDPAY' | 'WATCHPAYS'>('BONDPAY')
+  const [activeGateway, setActiveGateway] = useState<'BONDPAY' | 'BLADEPAY'>('BONDPAY')
   const [enableBothGateways, setEnableBothGateways] = useState(false)
 
   // User-selected gateway (null = use system default)
-  const [selectedGateway, setSelectedGateway] = useState<'BONDPAY' | 'WATCHPAYS' | null>(null)
+  const [selectedGateway, setSelectedGateway] = useState<'BONDPAY' | 'BLADEPAY' | null>(null)
 
-  // Effective gateway used for the current session
-  const effectiveGateway: 'BONDPAY' | 'WATCHPAYS' = selectedGateway ?? activeGateway
+  // Gateway Locking:
+  // Locked strictly AFTER payment_url has been generated and saved.
+  // Before payment_url exists, users can freely toggle between gateways.
+  const isGatewayLocked = Boolean(order?.payment_url)
+  const lockedGateway: 'BONDPAY' | 'BLADEPAY' | null = isGatewayLocked
+    ? ((order?.payment_gateway as 'BONDPAY' | 'BLADEPAY' | null) || (selectedGateway ?? activeGateway))
+    : null
+  const lockedGatewayName = (lockedGateway || selectedGateway || activeGateway) === 'BLADEPAY' ? 'BladePay' : 'BondPay'
+
+  // Effective gateway used for the current session:
+  // If payment_url exists, strictly enforce the locked gateway.
+  // Otherwise, allow user's selected gateway or active system default.
+  const effectiveGateway: 'BONDPAY' | 'BLADEPAY' = isGatewayLocked && lockedGateway
+    ? lockedGateway
+    : (selectedGateway ?? activeGateway)
 
   // Payment gateway state
   const [bondPayLoading, setBondPayLoading] = useState(false)
@@ -154,10 +167,15 @@ export default function OrderCheckoutPage() {
           })
         }
 
-        // Freeze gateway selection if already chosen on order
-        if (orderData.payment_gateway === 'WATCHPAYS' || orderData.payment_gateway === 'BONDPAY') {
+        // Gateway selection on order load:
+        // Lock selection ONLY if payment_url already exists.
+        // Otherwise keep it unlocked so user can freely choose their gateway.
+        if (orderData.payment_url && (orderData.payment_gateway === 'BLADEPAY' || orderData.payment_gateway === 'BONDPAY')) {
           setActiveGateway(orderData.payment_gateway)
           setSelectedGateway(orderData.payment_gateway)
+        } else if (orderData.payment_gateway === 'BLADEPAY' || orderData.payment_gateway === 'BONDPAY') {
+          setActiveGateway(orderData.payment_gateway)
+          setSelectedGateway(null)
         }
 
         // Fetch payment settings from system_settings or fallback to /api/admin/settings
@@ -180,8 +198,8 @@ export default function OrderCheckoutPage() {
             if (!psErr && !paymentSettings && typeof data?.allow_manual_payment === 'boolean') {
               setAllowManualPayment(data.allow_manual_payment)
             }
-            if (data?.active_gateway && !orderData.payment_gateway) {
-              const gw = data.active_gateway === 'WATCHPAYS' ? 'WATCHPAYS' : 'BONDPAY'
+            if (data?.active_gateway && !orderData.payment_url && !orderData.payment_gateway) {
+              const gw = data.active_gateway === 'BLADEPAY' ? 'BLADEPAY' : 'BONDPAY'
               setActiveGateway(gw)
               setSelectedGateway(null)
             }
@@ -308,10 +326,14 @@ export default function OrderCheckoutPage() {
   const handleBondPayWithRetry = async () => {
     if (!order) return
 
-    const gatewayToUse = selectedGateway || effectiveGateway
+    // If order.payment_url already exists, enforce the locked gateway;
+    // otherwise use the user's selected gateway (selectedGateway || effectiveGateway)
+    const gatewayToUse: 'BONDPAY' | 'BLADEPAY' = (order.payment_url && (order.payment_gateway === 'BLADEPAY' || order.payment_gateway === 'BONDPAY'))
+      ? order.payment_gateway
+      : effectiveGateway
 
-    // 1. If payment link already exists for the selected gateway, redirect directly without calling backend API
-    if (order.payment_url && order.payment_gateway === gatewayToUse) {
+    // 1. If payment link already exists, redirect directly without calling backend API
+    if (order.payment_url) {
       window.location.href = order.payment_url
       return
     }
@@ -334,8 +356,8 @@ export default function OrderCheckoutPage() {
       })
       const data = await res.json()
       if (data?.gateway) {
-        setActiveGateway(data.gateway === 'WATCHPAYS' ? 'WATCHPAYS' : 'BONDPAY')
-        setSelectedGateway(data.gateway === 'WATCHPAYS' ? 'WATCHPAYS' : 'BONDPAY')
+        setActiveGateway(data.gateway === 'BLADEPAY' ? 'BLADEPAY' : 'BONDPAY')
+        setSelectedGateway(data.gateway === 'BLADEPAY' ? 'BLADEPAY' : 'BONDPAY')
       }
       if (data?.payment_url) {
         setOrder((prev) =>
@@ -392,8 +414,8 @@ export default function OrderCheckoutPage() {
         })
         const data = await res.json()
         if (data?.gateway) {
-          setActiveGateway(data.gateway === 'WATCHPAYS' ? 'WATCHPAYS' : 'BONDPAY')
-          setSelectedGateway(data.gateway === 'WATCHPAYS' ? 'WATCHPAYS' : 'BONDPAY')
+          setActiveGateway(data.gateway === 'BLADEPAY' ? 'BLADEPAY' : 'BONDPAY')
+          setSelectedGateway(data.gateway === 'BLADEPAY' ? 'BLADEPAY' : 'BONDPAY')
         }
         if (data?.payment_url) {
           setOrder((prev) =>
@@ -898,7 +920,7 @@ export default function OrderCheckoutPage() {
                     </div>
 
                     {/* ====== ACTIVE PAYMENT SESSION BANNER ====== */}
-                    {order.payment_url && order.status === 'PENDING' && order.payment_gateway === effectiveGateway && (
+                    {order.payment_url && order.status === 'PENDING' && (
                       <div className="flex items-start gap-3 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-200 text-sm shadow-lg shadow-emerald-950/20">
                         <Zap className="w-5 h-5 shrink-0 mt-0.5 text-emerald-400 animate-pulse" />
                         <div className="flex-1">
@@ -906,7 +928,7 @@ export default function OrderCheckoutPage() {
                             Active Payment Session — Redirecting to your original checkout link
                           </p>
                           <p className="text-xs text-emerald-200/80 mt-1">
-                            A secure checkout link is already active for this order with <strong>{order.payment_gateway || effectiveGateway}</strong>. Click below to proceed directly without generating a duplicate link.
+                            A secure checkout link is already active for this order with <strong>{lockedGatewayName}</strong>. Click below to proceed directly without generating a duplicate link.
                           </p>
                         </div>
                       </div>
@@ -915,13 +937,34 @@ export default function OrderCheckoutPage() {
                     {/* ====== DUAL GATEWAY SELECTOR ====== */}
                     {enableBothGateways && (
                       <div className="space-y-3">
-                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Choose Payment Gateway</p>
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Choose Payment Gateway</p>
+                          {isGatewayLocked && (
+                            <span
+                              id="gateway-locked-badge"
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/10 border border-amber-500/30 text-amber-300"
+                            >
+                              <Lock className="w-3 h-3 text-amber-400" />
+                              Locked to {lockedGatewayName}
+                            </span>
+                          )}
+                        </div>
+
+                        {isGatewayLocked && (
+                          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-800/80 border border-slate-700/70 text-slate-300 text-xs">
+                            <Lock className="w-4 h-4 text-amber-400 shrink-0" />
+                            <span>This order is locked to <strong>{lockedGatewayName}</strong> and cannot be switched to another gateway.</span>
+                          </div>
+                        )}
+
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           {/* BondPay Card */}
                           <button
                             id="gateway-select-bondpay"
                             type="button"
+                            disabled={isGatewayLocked || bondPayLoading}
                             onClick={() => {
+                              if (isGatewayLocked) return
                               if (effectiveGateway !== 'BONDPAY') {
                                 setSelectedGateway('BONDPAY')
                                 setBondPayError('')
@@ -930,6 +973,8 @@ export default function OrderCheckoutPage() {
                             className={`relative flex items-start gap-3 p-4 rounded-xl border-2 text-left transition-all duration-200 ${
                               effectiveGateway === 'BONDPAY'
                                 ? 'border-emerald-500/70 bg-emerald-500/10 shadow-lg shadow-emerald-500/10'
+                                : isGatewayLocked
+                                ? 'border-slate-800 bg-slate-900/30 opacity-40 cursor-not-allowed'
                                 : 'border-slate-700 bg-slate-800/50 hover:border-slate-600 hover:bg-slate-800'
                             }`}
                           >
@@ -937,7 +982,14 @@ export default function OrderCheckoutPage() {
                               <CreditCard className="w-5 h-5 text-white" />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className="font-bold text-white text-sm">⚡ BondPay</p>
+                              <div className="flex items-center gap-2">
+                                <p className="font-bold text-white text-sm">⚡ BondPay</p>
+                                {isGatewayLocked && effectiveGateway === 'BONDPAY' && (
+                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-amber-300 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20">
+                                    <Lock className="w-2.5 h-2.5" /> Locked
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-xs text-slate-400 mt-0.5">Instant UPI / QR Code</p>
                             </div>
                             {effectiveGateway === 'BONDPAY' && (
@@ -947,31 +999,42 @@ export default function OrderCheckoutPage() {
                             )}
                           </button>
 
-                          {/* WatchPays Card */}
+                          {/* BladePay Card */}
                           <button
-                            id="gateway-select-watchpays"
+                            id="gateway-select-bladepay"
                             type="button"
+                            disabled={isGatewayLocked || bondPayLoading}
                             onClick={() => {
-                              if (effectiveGateway !== 'WATCHPAYS') {
-                                setSelectedGateway('WATCHPAYS')
+                              if (isGatewayLocked) return
+                              if (effectiveGateway !== 'BLADEPAY') {
+                                setSelectedGateway('BLADEPAY')
                                 setBondPayError('')
                               }
                             }}
                             className={`relative flex items-start gap-3 p-4 rounded-xl border-2 text-left transition-all duration-200 ${
-                              effectiveGateway === 'WATCHPAYS'
-                                ? 'border-indigo-500/70 bg-indigo-500/10 shadow-lg shadow-indigo-500/10'
+                              effectiveGateway === 'BLADEPAY'
+                                ? 'border-violet-500/70 bg-violet-500/10 shadow-lg shadow-violet-500/10'
+                                : isGatewayLocked
+                                ? 'border-slate-800 bg-slate-900/30 opacity-40 cursor-not-allowed'
                                 : 'border-slate-700 bg-slate-800/50 hover:border-slate-600 hover:bg-slate-800'
                             }`}
                           >
-                            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shrink-0">
+                            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shrink-0">
                               <Zap className="w-5 h-5 text-white" />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className="font-bold text-white text-sm">💳 WatchPays</p>
+                              <div className="flex items-center gap-2">
+                                <p className="font-bold text-white text-sm">💳 BladePay</p>
+                                {isGatewayLocked && effectiveGateway === 'BLADEPAY' && (
+                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-amber-300 bg-amber-400/10 px-1.5 py-0.5 rounded border border-amber-400/20">
+                                    <Lock className="w-2.5 h-2.5" /> Locked
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-xs text-slate-400 mt-0.5">Fast UPI / Net Banking</p>
                             </div>
-                            {effectiveGateway === 'WATCHPAYS' && (
-                              <div className="absolute top-3 right-3 w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center">
+                            {effectiveGateway === 'BLADEPAY' && (
+                              <div className="absolute top-3 right-3 w-5 h-5 rounded-full bg-violet-500 flex items-center justify-center">
                                 <Check className="w-3 h-3 text-white" />
                               </div>
                             )}
@@ -980,12 +1043,22 @@ export default function OrderCheckoutPage() {
                       </div>
                     )}
 
+                    {/* Single Gateway Locked Badge if enableBothGateways is off */}
+                    {!enableBothGateways && isGatewayLocked && (
+                      <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-slate-800/60 border border-slate-700/60 text-xs">
+                        <span className="text-slate-400">Payment Gateway</span>
+                        <span className="inline-flex items-center gap-1.5 font-semibold text-amber-300">
+                          <Lock className="w-3.5 h-3.5 text-amber-400" /> Locked to {lockedGatewayName}
+                        </span>
+                      </div>
+                    )}
+
                 {/* Notice banner */}
                     <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-sm">
                       <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-amber-400" />
                       <p>
                         <strong>Manual payments are currently disabled.</strong> Please pay automatically
-                        using <strong>{effectiveGateway === 'WATCHPAYS' ? 'WatchPays' : 'BondPay'} / Instant UPI</strong>. You will be redirected to a
+                        using <strong>{effectiveGateway === 'BLADEPAY' ? 'BladePay' : 'BondPay'} / Instant UPI</strong>. You will be redirected to a
                         secure payment page to complete your order.
                       </p>
                     </div>
@@ -1032,7 +1105,7 @@ export default function OrderCheckoutPage() {
                               <p className="text-xs text-amber-300/80 mt-0.5">
                                 {retryNextIn > 0
                                   ? `Retrying automatically in ${retryNextIn}s`
-                                  : `Connecting to ${effectiveGateway === 'WATCHPAYS' ? 'WatchPays' : 'BondPay'}…`}
+                                  : `Connecting to ${effectiveGateway === 'BLADEPAY' ? 'BladePay' : 'BondPay'}…`}
                               </p>
                             </div>
                             {/* MM:SS countdown badge */}
@@ -1077,8 +1150,8 @@ export default function OrderCheckoutPage() {
                         disabled={bondPayLoading}
                         onClick={handleBondPayWithRetry}
                         className={`w-full flex items-center justify-center gap-2.5 py-3.5 rounded-xl font-bold text-base text-white hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-lg cursor-pointer ${
-                          effectiveGateway === 'WATCHPAYS'
-                            ? 'bg-gradient-to-r from-indigo-600 to-violet-600 shadow-indigo-500/20'
+                          effectiveGateway === 'BLADEPAY'
+                            ? 'bg-gradient-to-r from-violet-600 to-purple-600 shadow-violet-500/20'
                             : 'bg-gradient-to-r from-amber-500 to-orange-500 shadow-amber-500/20'
                         }`}
                       >
@@ -1094,10 +1167,10 @@ export default function OrderCheckoutPage() {
                           </>
                         ) : (
                           <>
-                            {effectiveGateway === 'WATCHPAYS'
+                            {effectiveGateway === 'BLADEPAY'
                               ? <Zap className="w-5 h-5" />
                               : <CreditCard className="w-5 h-5" />}
-                            Pay with {effectiveGateway === 'WATCHPAYS' ? 'WatchPays' : 'BondPay'} (₹{Number(order.inr_amount).toLocaleString('en-IN')}) →
+                            Pay with {effectiveGateway === 'BLADEPAY' ? 'BladePay' : 'BondPay'} (₹{Number(order.inr_amount).toLocaleString('en-IN')}) →
                           </>
                         )}
                       </button>

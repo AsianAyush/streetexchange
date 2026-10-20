@@ -57,6 +57,9 @@ export default function CheckoutPage() {
             network: data.network ?? 'TRC20',
             wallet_address: data.walletAddress,
             status: 'PENDING',
+            payment_gateway: null,
+            payment_url: null,
+            gateway_order_no: null,
           })
           .select()
           .single()

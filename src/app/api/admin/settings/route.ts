@@ -194,12 +194,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // Validate that at least one valid setting is being updated
   const hasManualPayment = typeof body.allow_manual_payment === 'boolean'
   const hasActiveGateway = typeof body.active_gateway === 'string' &&
-    ['BONDPAY', 'WATCHPAYS'].includes(body.active_gateway.toUpperCase())
+    ['BONDPAY', 'BLADEPAY', 'WATCHPAYS'].includes(body.active_gateway.toUpperCase())
   const hasEnableBothGateways = typeof body.enable_both_gateways === 'boolean'
 
   if (!hasManualPayment && !hasActiveGateway && !hasEnableBothGateways) {
     return NextResponse.json(
-      { error: 'Provide `allow_manual_payment` (boolean), `active_gateway` ("BONDPAY" | "WATCHPAYS"), and/or `enable_both_gateways` (boolean).' },
+      { error: 'Provide `allow_manual_payment` (boolean), `active_gateway` ("BONDPAY" | "BLADEPAY"), and/or `enable_both_gateways` (boolean).' },
       { status: 400 },
     )
   }

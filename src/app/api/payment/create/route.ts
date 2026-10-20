@@ -6,7 +6,7 @@
  * It reads the `active_gateway` setting from Supabase system_settings,
  * then proxies the payment creation request to either:
  *   - /api/payment/bondpay/create  (if active_gateway === 'BONDPAY')
- *   - /api/payment/watchpays/create (if active_gateway === 'WATCHPAYS')
+ *   - /api/payment/bladepay/create (if active_gateway === 'BLADEPAY')
  *
  * The client only needs to call POST /api/payment/create with { orderId }
  * and the correct gateway is selected automatically based on admin config.
@@ -16,7 +16,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { Database } from '@/lib/database.types'
 import { POST as bondPayHandler } from '@/app/api/payment/bondpay/create/route'
-import { POST as watchPaysHandler } from '@/app/api/payment/watchpays/create/route'
+import { POST as bladePayHandler } from '@/app/api/payment/bladepay/create/route'
 
 function createServiceClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
@@ -26,11 +26,11 @@ function createServiceClient() {
   })
 }
 
-type ActiveGateway = 'BONDPAY' | 'WATCHPAYS'
+type ActiveGateway = 'BONDPAY' | 'BLADEPAY'
 
 /**
  * Fetch the active gateway setting from Supabase.
- * Defaults to WATCHPAYS if not configured (never hardcode BONDPAY).
+ * Defaults to BLADEPAY if not configured.
  */
 async function getActiveGateway(): Promise<ActiveGateway> {
   try {
@@ -43,18 +43,18 @@ async function getActiveGateway(): Promise<ActiveGateway> {
 
     if (error) {
       console.warn('[payment/create] Failed to fetch active_gateway setting:', error.message)
-      return 'WATCHPAYS'
+      return 'BLADEPAY'
     }
 
-    // value is stored as JSONB — could be "BONDPAY" or "WATCHPAYS" (with or without quotes)
+    // value is stored as JSONB — could be "BONDPAY" or "BLADEPAY" (with or without quotes)
     const rawValue = data?.value
     const gateway = (typeof rawValue === 'string' ? rawValue : String(rawValue || '')).toUpperCase().trim()
 
     if (gateway === 'BONDPAY') return 'BONDPAY'
-    return 'WATCHPAYS' // Default fallback: WATCHPAYS
+    return 'BLADEPAY' // Default fallback: BLADEPAY
   } catch (err) {
     console.error('[payment/create] Error fetching active gateway:', err)
-    return 'WATCHPAYS'
+    return 'BLADEPAY'
   }
 }
 
@@ -132,80 +132,54 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     )
   }
 
-  // 3. Gateway Selection Priority:
-  //   a. First check: Payload `paymentGateway` (sent directly from frontend selection).
-  //   b. Second check: `order.payment_gateway` from Supabase `orders` table.
-  //   c. Third check: Global `active_gateway` from `system_settings` table.
-  //   d. Fallback: Default to 'WATCHPAYS' (or active setting), NEVER hardcode 'BONDPAY'.
-  const activeGatewaySetting = await getActiveGateway()
+  // 3. Gateway Selection & Locking:
+  // - If order.payment_url ALREADY exists: enforce the lock using order.payment_gateway so it cannot be changed.
+  // - If order.payment_url does NOT exist yet: accept user's selected paymentGateway from frontend payload,
+  //   save it to orders.payment_gateway, and generate the link.
+  if (order.payment_url && order.status === 'PENDING') {
+    const lockedGateway = (order.payment_gateway === 'BONDPAY' || order.payment_gateway === 'BLADEPAY')
+      ? (order.payment_gateway as ActiveGateway)
+      : 'BLADEPAY'
 
-  let chosenGateway: ActiveGateway
-  if (requestedGateway === 'WATCHPAYS' || requestedGateway === 'BONDPAY') {
-    chosenGateway = requestedGateway as ActiveGateway
-  } else if (order.payment_gateway === 'WATCHPAYS' || order.payment_gateway === 'BONDPAY') {
-    chosenGateway = order.payment_gateway as ActiveGateway
-  } else if (activeGatewaySetting === 'BONDPAY' || activeGatewaySetting === 'WATCHPAYS') {
-    chosenGateway = activeGatewaySetting as ActiveGateway
-  } else {
-    chosenGateway = 'WATCHPAYS'
-  }
-
-  console.log(`[payment/create] Gateway chosen: ${chosenGateway} (requested: ${requestedGateway ?? 'none'}, order: ${order.payment_gateway}, setting: ${activeGatewaySetting})`)
-
-  // 4. Idempotency Check & Gateway Switch Handling:
-  // If order already has an active payment_url AND status is strictly 'PENDING':
-  // If user explicitly switched gateways (e.g. from BONDPAY to WATCHPAYS):
-  //   - Do NOT return the old cached payment_url.
-  //   - Clear order.payment_url and gateway_order_no in Supabase, update payment_gateway = chosenGateway,
-  //     and process a fresh session through the new gateway.
-  // Else (no gateway switch):
-  //   - Immediately return existing payment_url and frozen gateway.
-  const isGatewaySwitch = Boolean(
-    order.payment_url && (
-      (requestedGateway && requestedGateway !== order.payment_gateway) ||
-      (order.payment_gateway && order.payment_gateway !== chosenGateway)
-    )
-  )
-
-  if (isGatewaySwitch) {
-    console.log(`[payment/create] Gateway switch detected for order ${orderId}: ${order.payment_gateway} -> ${chosenGateway}. Clearing old payment_url and starting fresh session.`)
-    await (serviceClient.from('orders') as any)
-      .update({
-        payment_url: null,
-        gateway_order_no: null,
-        merchant_order_no: null,
-        payment_gateway: chosenGateway,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', orderId)
-    order.payment_url = null
-    order.gateway_order_no = null
-    order.merchant_order_no = null
-    order.payment_gateway = chosenGateway
-  } else if (order.payment_url && order.status === 'PENDING') {
-    console.log(`[payment/create] Idempotent hit: Reusing existing payment_url for order ${orderId}: ${order.payment_url}`)
+    console.log(`[payment/create] Payment link already active for order ${orderId}. Enforcing lock to ${lockedGateway}: ${order.payment_url}`)
     return NextResponse.json({
       success: true,
       payment_url: order.payment_url,
       gateway_order_no: order.gateway_order_no || null,
-      gateway: chosenGateway,
+      gateway: lockedGateway,
       cached: true,
     })
   }
 
-  // Persist the chosen gateway to the order explicitly before routing
-  await (serviceClient.from('orders') as any)
-    .update({ payment_gateway: chosenGateway })
-    .eq('id', orderId)
-    .then(({ error }: { error: any }) => {
-      if (error) console.warn('[payment/create] Could not persist payment_gateway to order:', error.message)
+  // No payment link exists yet: accept the user's selected gateway from payload
+  let chosenGateway: ActiveGateway
+  if (requestedGateway === 'BLADEPAY' || requestedGateway === 'BONDPAY') {
+    chosenGateway = requestedGateway as ActiveGateway
+  } else {
+    const activeGatewaySetting = await getActiveGateway()
+    chosenGateway = activeGatewaySetting === 'BONDPAY' ? 'BONDPAY' : 'BLADEPAY'
+  }
+
+  console.log(`[payment/create] No active link for order ${orderId}. Accepting selected gateway: ${chosenGateway} (requested: ${requestedGateway ?? 'none'})`)
+
+  // Save the selected gateway to orders.payment_gateway
+  const { error: lockErr } = await (serviceClient.from('orders') as any)
+    .update({
+      payment_gateway: chosenGateway,
+      updated_at: new Date().toISOString(),
     })
-    .catch(() => {})
+    .eq('id', orderId)
+
+  if (lockErr) {
+    console.warn('[payment/create] Could not save selected payment_gateway to order:', lockErr.message)
+  }
+
+  order.payment_gateway = chosenGateway
 
   // 5. Route request to chosen gateway handler
   const baseUrl = req.nextUrl.origin || process.env.NEXT_PUBLIC_SITE_URL || 'https://streetexchange.vercel.app'
-  const targetPath = chosenGateway === 'WATCHPAYS'
-    ? '/api/payment/watchpays/create'
+  const targetPath = chosenGateway === 'BLADEPAY'
+    ? '/api/payment/bladepay/create'
     : '/api/payment/bondpay/create'
 
   const targetUrl = `${baseUrl}${targetPath}`
@@ -223,8 +197,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       headers: req.headers,
       body: JSON.stringify(reqBody),
     })
-    response = chosenGateway === 'WATCHPAYS'
-      ? await watchPaysHandler(forwardReq)
+    response = chosenGateway === 'BLADEPAY'
+      ? await bladePayHandler(forwardReq)
       : await bondPayHandler(forwardReq)
   } catch (directErr: any) {
     console.warn(`[payment/create] Direct handler call to ${chosenGateway} failed, falling back to fetch:`, directErr?.message || directErr)

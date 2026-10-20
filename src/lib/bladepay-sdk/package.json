@@ -1,0 +1,31 @@
+{
+  "name": "bladepay-sdk",
+  "version": "1.0.0",
+  "description": "Official Node.js SDK and Developer Kit for BladePay Payment Gateway Aggregator",
+  "main": "src/index.js",
+  "types": "types/index.d.ts",
+  "scripts": {
+    "test": "node test/test-sdk.js",
+    "example:payin": "node examples/1_create_payin_order.js",
+    "example:status": "node examples/2_check_order_status.js",
+    "example:payout": "node examples/4_create_bank_payout.js",
+    "example:upi-payout": "node examples/5_create_upi_payout.js",
+    "example:balance": "node examples/7_fetch_balance.js",
+    "example:webhook": "node examples/8_webhook_server_express.js"
+  },
+  "keywords": [
+    "bladepay",
+    "payment-gateway",
+    "payin",
+    "payout",
+    "upi",
+    "imps",
+    "sdk",
+    "developer-kit"
+  ],
+  "author": "BladePay Engineering Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
